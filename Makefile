@@ -40,7 +40,7 @@ clean:
 	rm -rf src/.antlr
 
 
-submit: clean
+submit:clean
 	git gc
 	bash submit.sh
 
