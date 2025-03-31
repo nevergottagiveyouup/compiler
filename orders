@@ -2,3 +2,4 @@
 强制恢复到上一次提交的状态：git reset --hard HEAD
 git reflog
 q(quit)
+liupan@liupan-VMware-Virtual-Platform:/mnt/hgfs/Compiler/Lab$ dos2unix submit.sh
