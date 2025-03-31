@@ -3,3 +3,4 @@
 git reflog
 q(quit)
 liupan@liupan-VMware-Virtual-Platform:/mnt/hgfs/Compiler/Lab$ dos2unix submit.sh
+提交时需要在linux系统上修改换行符并且重新提交，再submit
