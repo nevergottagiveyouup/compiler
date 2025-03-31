@@ -1,4 +1,4 @@
-
+/src/*
 !/src/*.java
 !/src/*.g4
 /src/*Lexer.java
