@@ -1,1 +1,1 @@
-编译g4文件：java -jar lib/antlr-4.13.2-complete.jar -o src src/SysYLexer.g4 src/SysYParser.g4
+编译g4文件：java -jar lib/antlr-4.13.2-complete.jar -o src -visitor src/SysYLexer.g4 src/SysYParser.g4

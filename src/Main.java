@@ -25,17 +25,22 @@ public class Main {
         parser.addErrorListener(errorListener);
 
         // 解析语法
-        SysYParser.CompUnitContext tree = parser.compUnit();
+        SysYParser.ProgramContext tree = parser.program();
 
-        // **如果有语法错误，不执行格式化**
+
+        // 创建 Visitor 并遍历
+        MyVisitor visitor = new MyVisitor();
+        visitor.visit(tree);
+
+        /*// **如果有语法错误，不执行格式化**
         if (parser.getNumberOfSyntaxErrors() > 0) {
             return; // 退出，不进行格式化
-        }
+        }*/
 
-        // 代码格式化
+        /*// 代码格式化
         SysYFormatter formatter = new SysYFormatter();
         formatter.visit(tree);
-        System.out.println(formatter.getFormattedCode()); // 输出格式化后的代码
+        System.out.println(formatter.getFormattedCode()); // 输出格式化后的代码*/
     }
 
     public static void printSysYTokenInformation(Token token) {

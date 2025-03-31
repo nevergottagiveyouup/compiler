@@ -1,6 +1,3 @@
-import org.antlr.v4.runtime.tree.*;
-import java.util.*;
-
 public class SysYFormatter extends SysYParserBaseVisitor<Void> {
     private StringBuilder formattedCode = new StringBuilder();
     private int indentLevel = 0;
