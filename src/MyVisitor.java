@@ -278,7 +278,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
             Type funcType = (symbol != null) ? symbol.getType() : null;
 
             if (funcType == null) {
-                reportError(2, "Function '" + funcName + "' is not defined", identLine);
+                //reportError(2, "Function '" + funcName + "' is not defined", identLine);
                 return null;
             }
             if (!(funcType instanceof FunctionType)) {
