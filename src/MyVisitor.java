@@ -1,8 +1,4 @@
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 public class MyVisitor extends SysYParserBaseVisitor<Type> {
     private SymbolTable symbolTable;
@@ -124,8 +120,18 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
                 return null;
             }
             Type rightType = visitExp(ctx.exp());
-            if (leftType != null && rightType != null && !leftType.matches(rightType)) {
-                if (!(leftType instanceof ArrayType && rightType instanceof ArrayType)) {
+            if (leftType != null && rightType != null) {
+                if (leftType instanceof ArrayType && rightType instanceof ArrayType) {
+                    ArrayType leftArray = (ArrayType) leftType;
+                    ArrayType rightArray = (ArrayType) rightType;
+                    int leftDim = leftArray.getDimension();
+                    int rightDim = rightArray.getDimension();
+                    if (leftDim != rightDim) {
+                        reportError(5, "Array dimensions mismatch in assignment", line);
+                        return null;
+                    }
+                    // 不检查 numElements，允许赋值
+                } else if (!leftType.matches(rightType)) {
                     reportError(5, "Type mismatch in assignment", line);
                     return null;
                 }
@@ -170,10 +176,25 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
             reportError(1, "Variable '" + varName + "' is not declared", line);
             return null;
         }
-        if (!ctx.L_BRACKT().isEmpty() && !(varType instanceof ArrayType)) {
-            reportError(9, "Applying subscript operator to non-array variable '" + varName + "'", line);
-            return null;
+
+        if (!ctx.L_BRACKT().isEmpty()) {
+            if (!(varType instanceof ArrayType)) {
+                reportError(9, "Applying subscript operator to non-array variable '" + varName + "'", line);
+                return null;
+            }
+
+            Type currentType = varType;
+            int indexCount = ctx.L_BRACKT().size();
+            for (int i = 0; i < indexCount; i++) {
+                if (!(currentType instanceof ArrayType)) {
+                    reportError(9, "Too many indices for array '" + varName + "'", line);
+                    return null;
+                }
+                currentType = ((ArrayType) currentType).getIndexedType();
+            }
+            return currentType;
         }
+
         return varType;
     }
 
@@ -328,6 +349,15 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
     }
 
     private Type getArrayType(SysYParser.VarDefContext ctx) {
-        return new ArrayType(new IntType(), 0);
+        List<Integer> dimensions = new ArrayList<>();
+        for (SysYParser.ConstExpContext constExp : ctx.constExp()) {
+            dimensions.add(Integer.parseInt(constExp.getText()));
+        }
+
+        Type currentType = new IntType();
+        for (int i = dimensions.size() - 1; i >= 0; i--) {
+            currentType = new ArrayType(currentType, dimensions.get(i));
+        }
+        return currentType;
     }
 }

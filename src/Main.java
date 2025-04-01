@@ -21,8 +21,8 @@ public class Main {
 
         // **移除默认错误监听器，添加自定义错误监听器**
         parser.removeErrorListeners();
-        MySyntaxErrorListener errorListener = new MySyntaxErrorListener();
-        parser.addErrorListener(errorListener);
+        //MySyntaxErrorListener errorListener = new MySyntaxErrorListener();
+        //parser.addErrorListener(errorListener);
 
         // 解析语法
         SysYParser.ProgramContext tree = parser.program();

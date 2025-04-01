@@ -1,15 +1,4 @@
-int a() {
-    return 1;
-}
-
-int a() {
-    return 0;
-}
-
-int d;
-
-int main() {
-    int b;
-    s=t;
-    b= c();
+int func(int a){
+int b = a;
+return 1;
 }

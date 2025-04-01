@@ -2,6 +2,7 @@ public class ArrayType extends Type {
     private Type contained; // 元素类型，可以是 int 或嵌套的 ArrayType
     private int numElements; // 当前维度的元素数量
 
+
     // 构造函数
     public ArrayType(Type contained, int numElements) {
         super(TypeKind.ARRAY);
