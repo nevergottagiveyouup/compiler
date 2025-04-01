@@ -1,4 +1,12 @@
-int func(int a){
-int b = a;
-return 1;
+int f(int a[]){return 1;}
+
+int main() {
+    int arr[1][2][3];
+    arr[1][2][3][4] = 0;
+    arr[1][2] = 0;
+    f(arr[1]);
+    f[1];
+    int x = arr[1][2][3][4];
+    int a = x[1];
+
 }
