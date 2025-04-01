@@ -67,7 +67,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
                     continue;
                 }
                 if (paramNames.contains(paramName)) {
-                    reportError(3, "Redefined variable: " + paramName, paramLine);
+                    //reportError(3, "Redefined variable: " + paramName, paramLine);
                     continue;
                 }
                 paramNames.add(paramName);
@@ -127,12 +127,12 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
                     int leftDim = leftArray.getDimension();
                     int rightDim = rightArray.getDimension();
                     if (leftDim != rightDim) {
-                        //reportError(5, "Array dimensions mismatch in assignment", line);
+                        reportError(5, "Array dimensions mismatch in assignment", line);
                         return null;
                     }
                     // 不检查 numElements，允许赋值
                 } else if (!leftType.matches(rightType)) {
-                    //reportError(5, "Type mismatch in assignment", line);
+                    reportError(5, "Type mismatch in assignment", line);
                     return null;
                 }
             }
@@ -151,7 +151,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
             if (funcType instanceof FunctionType) {
                 Type expectedType = ((FunctionType) funcType).getReturnType();
                 if (!expectedType.matches(retType)) {
-                    //reportError(7, "Return type mismatch", retLine);
+                    reportError(7, "Return type mismatch", retLine);
                 }
             }
             return null;
@@ -208,7 +208,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
                 continue;
             }
             if (currentContext.equals("global") && symbolTable.lookup(varName) != null) {
-                reportError(3, "Redefined variable or conflicts with function: " + varName, line);
+                //reportError(3, "Redefined variable or conflicts with function: " + varName, line);
             } else {
                 visitVarDef(varDef);
             }
@@ -226,7 +226,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
         }
 
         if (symbolTable.lookupInCurrentScope(varName) != null) {
-            reportError(3, "Variable '" + varName + "' is already defined in this scope", line);
+            //reportError(3, "Variable '" + varName + "' is already defined in this scope", line);
             return null;
         }
 
@@ -235,7 +235,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
             Type initType = visitInitVal(ctx.initVal());
             if (initType != null && !varType.matches(initType)) {
                 if (!(varType instanceof ArrayType && initType instanceof ArrayType)) {
-                    //reportError(5, "Type mismatch in variable initialization", line);
+                    reportError(5, "Type mismatch in variable initialization", line);
                 }
             }
         }
@@ -319,7 +319,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
         if (ctx.unaryOp() != null) {
             Type operandType = visit(ctx.exp(0));
             if (operandType != null && !(operandType instanceof IntType)) {
-                //reportError(6, "Operator requires int type", line);
+                reportError(6, "Operator requires int type", line);
                 return null;
             }
             return operandType;
@@ -327,12 +327,12 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
         if (ctx.exp().size() == 2) {
             Type left = visit(ctx.exp(0));
             if (left != null && !(left instanceof IntType)) {
-                //reportError(6, "Operator requires int type", line);
+                reportError(6, "Operator requires int type", line);
                 return null;
             }
             Type right = visit(ctx.exp(1));
             if (right != null && !(right instanceof IntType)) {
-                //reportError(6, "Operator requires int type", line);
+                reportError(6, "Operator requires int type", line);
                 return null;
             }
             return left;
