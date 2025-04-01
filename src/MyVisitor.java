@@ -49,7 +49,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
         }
 
         if (symbolTable.lookup(funcName) != null) {
-            reportError(4, "Function '" + funcName + "' is already defined", line);
+            //reportError(4, "Function '" + funcName + "' is already defined", line);
             return null;
         }
 
