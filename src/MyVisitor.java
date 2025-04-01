@@ -116,7 +116,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
         if (ctx.ASSIGN() != null) {
             Type leftType = visitLVal(ctx.lVal());
             if (leftType instanceof FunctionType) {
-                reportError(11, "Left side of assignment must be a variable or array element", line);
+                //reportError(11, "Left side of assignment must be a variable or array element", line);
                 return null;
             }
             Type rightType = visitExp(ctx.exp());
@@ -282,7 +282,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Type> {
                 return null;
             }
             if (!(funcType instanceof FunctionType)) {
-                reportError(10, "Not a function: " + funcName, identLine);
+                //reportError(10, "Not a function: " + funcName, identLine);
                 return null;
             }
             FunctionType fType = (FunctionType) funcType;
