@@ -15,7 +15,6 @@ public class Main {
         // 词法分析
         SysYLexer lexer = new SysYLexer(input);
         CommonTokenStream tokens = new CommonTokenStream(lexer);
-
         // 语法分析
         SysYParser parser = new SysYParser(tokens);
 
