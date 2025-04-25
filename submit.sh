@@ -30,7 +30,7 @@ echo "Submit to assignment: $ID"
 cd .. 
 rm -f $FILE
 #zip -r "$FILE" $(ls -d "$WORKSPACE/.git" 2>/dev/null) > /dev/null
-zip -r "$FILE" "$WORKSPACE" -x "$WORKSPACE/lib/*" "$WORKSPACE/*.jar"
+zip -r "$FILE" "$WORKSPACE" -x "$WORKSPACE/lib/*" "$WORKSPACE/*.jar" "$WORKSPACE/.git/*"
 if [ $? -ne 0 ]; then
   echo ""
   echo "Fail to zip for submit.zip!"
