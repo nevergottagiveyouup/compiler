@@ -4,3 +4,10 @@ git reflog
 q(quit)
 liupan@liupan-VMware-Virtual-Platform:/mnt/hgfs/Compiler/Lab$ dos2unix submit.sh
 提交时需要在linux系统上修改换行符并且重新提交，再submit
+
+javac -cp ".:../lib/*"  *.java(中间可加 -d 附上输出目录)
+java -cp ".:../lib/*" Main ../tests/test1.sysy
+
+llvm-as output.ll
+
+java -cp ".:../lib/*" Main ../tests/test1.sysy out.ll
