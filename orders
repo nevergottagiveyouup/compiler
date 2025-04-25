@@ -5,9 +5,20 @@ q(quit)
 liupan@liupan-VMware-Virtual-Platform:/mnt/hgfs/Compiler/Lab$ dos2unix submit.sh
 提交时需要在linux系统上修改换行符并且重新提交，再submit
 
-javac -cp ".:../lib/*"  *.java(中间可加 -d 附上输出目录)
-java -cp ".:../lib/*" Main ../tests/test1.sysy
+javac -cp ".:../lib/*"  *.java(中间可加 -d 附上输出目录)   编译
+java -cp ".:../lib/*" Main ../tests/test1.sysy   运行
 
-llvm-as output.ll
+llvm-as output.ll 检查llvm ir有没有错误
+
 
 java -cp ".:../lib/*" Main ../tests/test1.sysy out.ll
+
+
+
+
+git rm --cached lib/javacpp-1.5.7-linux-x86_64.jar lib/javacpp-1.5.7.jar lib/kotlin-stdlib-1.9.0.jar lib/llvm-13.0.1-1.5.7-linux-x86_64.jar lib/llvm-13.0.1-1.5.7.jar lib/llvm-platform-13.0.1-1.5.7.jar lib/llvm4j-0.1.2-SNAPSHOT.jar
+git rm -r --cached *.class
+--cached：仅从 Git 索引中移除，不删除本地文件。
+-r：对目录或通配符（如 *.class）递归移除。
+
+git ls-files 提交的文件

@@ -39,7 +39,7 @@ clean:
 	rm -rf out
 	rm -rf src/.antlr
 	rm -rf src/*.class
-	
+
 
 
 submit:clean
