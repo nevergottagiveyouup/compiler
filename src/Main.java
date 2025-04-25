@@ -1,6 +1,8 @@
 import org.antlr.v4.runtime.*;
 
+import java.io.FileWriter;
 import java.io.IOException;
+import java.io.PrintWriter;
 
 public class Main {
     public static void main(String[] args) throws IOException {
@@ -31,15 +33,17 @@ public class Main {
         MyVisitor visitor = new MyVisitor();
         visitor.visit(tree);
 
-        /*// **如果有语法错误，不执行格式化**
-        if (parser.getNumberOfSyntaxErrors() > 0) {
-            return; // 退出，不进行格式化
-        }*/
+        // 输出 LLVM IR 到文件
+        try {
+            visitor.writeToFile("output.ll"); // 使用 .ll 扩展名以符合 LLVM IR 惯例
+            System.out.println("LLVM IR successfully written to output.ll");
+        } catch (RuntimeException e) {
+            System.err.println("Error writing LLVM IR to file: " + e.getMessage());
+            System.exit(1);
+        } finally {
+            visitor.close(); // 确保释放资源
+        }
 
-        /*// 代码格式化
-        SysYFormatter formatter = new SysYFormatter();
-        formatter.visit(tree);
-        System.out.println(formatter.getFormattedCode()); // 输出格式化后的代码*/
     }
 
     public static void printSysYTokenInformation(Token token) {

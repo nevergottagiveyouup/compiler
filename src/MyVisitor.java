@@ -34,10 +34,12 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
     private final Module module;
     private final IRBuilder builder;
     private final Deque<Map<String, Value>> scopeStack = new LinkedList<>();
-    private Function currentFunction;
+
     private boolean isConstantEvaluation = false;
     // 循环栈，用于 break 和 continue
     private final Deque<LoopContext> loopStack = new LinkedList<>();
+    private FunctionType currentFunctionType;
+    private Function currentFunction;
 
     // 循环上下文，存储 while 的头块和退出块
     private static class LoopContext {
@@ -97,11 +99,14 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
     }
 
 
-    @Override
     public Value visitFuncDef(SysYParser.FuncDefContext ctx) {
         // 提取函数信息
         String funcName = ctx.IDENT().getText();
         Type returnType = visitFuncTypeCustom(ctx.funcType());
+        // 调试：打印 returnType
+        System.err.println("Debug: Function '" + funcName + "' returnType: " +
+                returnType.getClass().getSimpleName() + ", value: " + returnType);
+
 
         // Part 1 验证（仅对 main 函数应用）
         if (funcName.equals("main")) {
@@ -117,6 +122,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
             }
         }
 
+
         // 处理函数参数
         List<Type> paramTypes = ctx.funcFParams() != null ?
                 ctx.funcFParams().funcFParam().stream()
@@ -127,12 +133,30 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
 
         // 创建函数
         Function func = module.addFunction(funcName, funcType);
+
+        /* 调试：打印 func.getType() 和 func 属性（仅监控）
+        Type funcTypeCheck = func.getType();
+        System.err.println("Debug: Function '" + funcName + "' func.getType(): " +
+                funcTypeCheck.getClass().getSimpleName() + ", value: " + funcTypeCheck);
+        System.err.println("Debug: Function '" + funcName + "' func name: " + func.getName() +
+                ", parameter count: " + func.getParameterCount());
+        */
+
+        // 验证 创建的对象的名字和参数量是否正确
+        if (!func.getName().equals(funcName) || func.getParameterCount() != paramTypes.size()) {
+            throw new RuntimeException("Error: Function '" + funcName + "' has invalid properties at line " +
+                    ctx.getStart().getLine());
+        }
+
+        Function prevFunction = currentFunction; // 保存当前函数
+        FunctionType prevFunctionType = currentFunctionType; // 保存当前函数类型
         currentFunction = func;
+        currentFunctionType = funcType; // 存储 FunctionType
 
         // 创建 entry 基本块
         BasicBlock entry = context.newBasicBlock("entry");
         func.addBasicBlock(entry);
-        builder.positionAfter(entry); // 替换 positionAtEnd 为 positionAfter
+        builder.positionAfter(entry);
 
         // 初始化作用域
         scopeStack.push(new HashMap<>());
@@ -146,7 +170,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
             for (int i = 0; i < params.size(); i++) {
                 Value paramAlloc = visitFuncFParam(params.get(i));
                 Argument paramValue = func.getParameter(i).unwrap();
-                builder.buildStore(paramValue, paramAlloc);
+                builder.buildStore(paramAlloc, paramValue);//参数顺序修正
             }
         }
 
@@ -170,7 +194,8 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
 
         // 清理
         scopeStack.pop();
-        currentFunction = null;
+        currentFunction = prevFunction; // 恢复之前的函数
+        currentFunctionType = prevFunctionType; // 恢复之前的函数类型
 
         return func;
     }
@@ -226,18 +251,15 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
             return null;
         }
 
+        // 处理 return 语句
         if (ctx.RETURN() != null) {
             Option<Value> retValue = ctx.exp() != null ? new Some<>(visit(ctx.exp())) : Option.empty();
-            Type funcType = currentFunction.getType(); // 使用 getType
-            FunctionType functionType;
-            if (funcType instanceof FunctionType) {
-                functionType = (FunctionType) funcType;
-            } else if (funcType instanceof PointerType) {
-                functionType = (FunctionType) ((PointerType) funcType).getElementType();
-            } else {
-                throw new RuntimeException("Error: Invalid function type at line " + ctx.getStart().getLine());
+            if (currentFunctionType == null) {
+                throw new RuntimeException("Error: No function type defined for return statement at line " +
+                        ctx.getStart().getLine());
             }
-            Type expectedType = functionType.getReturnType(); // 获取返回类型
+            Type expectedType = currentFunctionType.getReturnType();
+
             if (expectedType.isVoidType() && retValue.isSome()) {
                 throw new RuntimeException("Error: Void function returning value at line " + ctx.getStart().getLine());
             }
@@ -245,15 +267,136 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 retValue = new Some<>(context.getInt32Type().getConstant(0, true));
                 System.err.println("Warning: Non-void function missing return value at line " + ctx.getStart().getLine());
             }
+            if (retValue.isSome()) {
+                Value value = retValue.unwrap();
+                Type actualType = value.getType();
+                if (actualType.getTypeKind() != expectedType.getTypeKind()) {
+                    throw new RuntimeException("Error: Return value type mismatch at line " +
+                            ctx.getStart().getLine());
+                }
+            }
             builder.buildReturn(retValue);
+            return null; // 直接返回，不创建 after_return
+        }
 
-            BasicBlock afterReturn = context.newBasicBlock("after_return");
-            currentFunction.addBasicBlock(afterReturn);
-            builder.positionAfter(afterReturn);
+        // 处理 if 和 if-else 语句
+        if (ctx.IF() != null) {
+            Value cond = visit(ctx.cond());
+            if (!cond.getType().equals(context.getInt1Type())) {
+                throw new RuntimeException("Error: Condition must evaluate to i1 at line " + ctx.getStart().getLine());
+            }
+
+            BasicBlock thenBlock = context.newBasicBlock("then");
+            BasicBlock elseBlock = ctx.ELSE() != null ? context.newBasicBlock("else") : null;
+            BasicBlock mergeBlock = context.newBasicBlock("merge");
+
+            builder.buildConditionalBranch(cond, thenBlock, ctx.ELSE() != null ? elseBlock : mergeBlock);
+
+            // 处理 then 分支
+            currentFunction.addBasicBlock(thenBlock);
+            builder.positionAfter(thenBlock);
+            if (!ctx.stmt().isEmpty()) {
+                visit(ctx.stmt(0)); // 访问 then 语句
+            }
+            if (getTerminator(builder.getInsertionBlock().unwrap()).isNone()) {
+                builder.buildBranch(mergeBlock);
+            }
+
+            // 处理 else 分支（如果存在）
+            if (ctx.ELSE() != null) {
+                currentFunction.addBasicBlock(elseBlock);
+                builder.positionAfter(elseBlock);
+                if (ctx.stmt().size() > 1) {
+                    visit(ctx.stmt(1)); // 访问 else 语句
+                }
+                if (getTerminator(builder.getInsertionBlock().unwrap()).isNone()) {
+                    builder.buildBranch(mergeBlock);
+                }
+            }
+
+            currentFunction.addBasicBlock(mergeBlock);
+            builder.positionAfter(mergeBlock);
             return null;
         }
 
-        // 其他语句处理（如果有）
+        // 处理 while 循环
+        if (ctx.WHILE() != null) {
+            BasicBlock headerBlock = context.newBasicBlock("loop_header");
+            BasicBlock bodyBlock = context.newBasicBlock("loop_body");
+            BasicBlock exitBlock = context.newBasicBlock("loop_exit");
+
+            builder.buildBranch(headerBlock);
+
+            currentFunction.addBasicBlock(headerBlock);
+            builder.positionAfter(headerBlock);
+            Value cond = visit(ctx.cond());
+            if (!cond.getType().equals(context.getInt1Type())) {
+                throw new RuntimeException("Error: Condition must evaluate to i1 at line " + ctx.getStart().getLine());
+            }
+            builder.buildConditionalBranch(cond, bodyBlock, exitBlock);
+
+            currentFunction.addBasicBlock(bodyBlock);
+            builder.positionAfter(bodyBlock);
+            loopStack.push(new LoopContext(headerBlock, exitBlock));
+            if (!ctx.stmt().isEmpty()) {
+                visit(ctx.stmt(0)); // 访问 while 语句
+            }
+            loopStack.pop();
+            if (getTerminator(builder.getInsertionBlock().unwrap()).isNone()) {
+                builder.buildBranch(headerBlock);
+            }
+
+            currentFunction.addBasicBlock(exitBlock);
+            builder.positionAfter(exitBlock);
+            return null;
+        }
+
+        // 处理 break 语句
+        if (ctx.BREAK() != null) {
+            if (loopStack.isEmpty()) {
+                throw new RuntimeException("Error: break statement outside loop at line " + ctx.getStart().getLine());
+            }
+            builder.buildBranch(loopStack.peek().exitBlock);
+            BasicBlock afterBreak = context.newBasicBlock("after_break");
+            currentFunction.addBasicBlock(afterBreak);
+            builder.positionAfter(afterBreak);
+            return null;
+        }
+
+        // 处理 continue 语句
+        if (ctx.CONTINUE() != null) {
+            if (loopStack.isEmpty()) {
+                throw new RuntimeException("Error: continue statement outside loop at line " + ctx.getStart().getLine());
+            }
+            builder.buildBranch(loopStack.peek().headerBlock);
+            BasicBlock afterContinue = context.newBasicBlock("after_continue");
+            currentFunction.addBasicBlock(afterContinue);
+            builder.positionAfter(afterContinue);
+            return null;
+        }
+
+        // 处理赋值语句（lVal = exp;）
+        if (ctx.lVal() != null && ctx.ASSIGN() != null) {
+            Value lValPtr = visit(ctx.lVal());
+            Value rVal = visit(ctx.exp());
+            builder.buildStore(rVal, lValPtr);
+            return null;
+        }
+
+        // 处理表达式语句（exp; 或空语句 ;）
+        if (ctx.exp() != null || ctx.SEMICOLON() != null) {
+            if (ctx.exp() != null) {
+                visit(ctx.exp());
+            }
+            return null;
+        }
+
+        // 处理块语句
+        if (ctx.block() != null) {
+            visit(ctx.block());
+            return null;
+        }
+
         return null;
     }
 
