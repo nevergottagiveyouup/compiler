@@ -29,8 +29,7 @@ echo "Submit to assignment: $ID"
 # Compress the whole folder instead of git storage only.
 cd .. 
 rm -f $FILE
-#zip -r "$FILE" $(ls -d "$WORKSPACE/.git" 2>/dev/null) > /dev/null
-zip -r "$FILE" "$WORKSPACE" -x "$WORKSPACE/lib/*" "$WORKSPACE/*.jar" "$WORKSPACE/.git/*"
+zip -r "$FILE" $(ls -d "$WORKSPACE/.git" 2>/dev/null) > /dev/null
 if [ $? -ne 0 ]; then
   echo ""
   echo "Fail to zip for submit.zip!"
