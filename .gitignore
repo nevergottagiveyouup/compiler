@@ -13,5 +13,5 @@
 /out
 /.idea
 /Lab.iml
-/lib/*
+/lib/*.jar
 
