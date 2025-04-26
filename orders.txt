@@ -8,7 +8,7 @@ liupan@liupan-VMware-Virtual-Platform:/mnt/hgfs/Compiler/Lab$ dos2unix submit.sh
 javac -cp ".:../lib/*"  *.java(中间可加 -d 附上输出目录)   编译
 java -cp ".:../lib/*" Main ../tests/test1.sysy   运行
 
-llvm-as output.ll 检查llvm ir有没有错误
+llvm-as out.ll 检查llvm ir有没有错误
 
 
 java -cp ".:../lib/*" Main ../tests/test1.sysy out.ll
@@ -20,4 +20,4 @@ git rm -r --cached *.class
 -r：对目录或通配符（如 *.class）递归移除。
 
 
-git ls-files 提交的文件
+git ls-files 查看commit里的文件，有助于找到多余文件

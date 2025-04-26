@@ -150,7 +150,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         //        ", currentFunction: " + func.getName());
 
         // 创建 entry 基本块
-        BasicBlock entry = context.newBasicBlock("entry");
+        BasicBlock entry = context.newBasicBlock(funcName+"Entry");
         func.addBasicBlock(entry);
         //System.err.println("Debug: visitFuncDef added entry block: " + entry.getName() +
         //        ", parent function: " + (entry.getFunction().isSome() ? entry.getFunction().unwrap().getName() : "none"));
@@ -336,12 +336,11 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 throw new RuntimeException("Error: Condition must evaluate to i1 at line " + ctx.getStart().getLine());
             }
 
-            BasicBlock thenBlock = context.newBasicBlock("then");
-            BasicBlock elseBlock = ctx.ELSE() != null ? context.newBasicBlock("else") : null;
-            BasicBlock mergeBlock = context.newBasicBlock("merge");
+            BasicBlock thenBlock = context.newBasicBlock("if_true");
+            BasicBlock elseBlock = /*ctx.ELSE() != null ? */context.newBasicBlock("if_false")/* : null*/;
+            BasicBlock mergeBlock = context.newBasicBlock("if_next");
 
-            builder.buildConditionalBranch(cond, thenBlock, ctx.ELSE() != null ? elseBlock : mergeBlock);
-
+            builder.buildConditionalBranch(cond, thenBlock, elseBlock);
             currentFunction.addBasicBlock(thenBlock);
             builder.positionAfter(thenBlock);
             if (!ctx.stmt().isEmpty()) {
@@ -351,29 +350,25 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 builder.buildBranch(mergeBlock);
             }
 
-            if (ctx.ELSE() != null) {
-                currentFunction.addBasicBlock(elseBlock);
-                builder.positionAfter(elseBlock);
-                if (ctx.stmt().size() > 1) {
-                    visit(ctx.stmt(1));
-                }
-                if (getTerminator(builder.getInsertionBlock().unwrap()).isNone()) {
-                    builder.buildBranch(mergeBlock);
-                }
+            currentFunction.addBasicBlock(elseBlock);
+            builder.positionAfter(elseBlock);
+            if (ctx.ELSE() != null && ctx.stmt().size() > 1) {
+                visit(ctx.stmt(1));
+            }
+            if (getTerminator(builder.getInsertionBlock().unwrap()).isNone()) {
+                builder.buildBranch(mergeBlock);
             }
 
             currentFunction.addBasicBlock(mergeBlock);
             builder.positionAfter(mergeBlock);
-            //System.err.println("Debug: visitStmt if end, currentBlock: " +
-            //        (builder.getInsertionBlock().isSome() ? builder.getInsertionBlock().unwrap().getName() : "none"));
             return null;
         }
 
         // 处理 while 循环
         if (ctx.WHILE() != null) {
-            BasicBlock headerBlock = context.newBasicBlock("loop_header");
-            BasicBlock bodyBlock = context.newBasicBlock("loop_body");
-            BasicBlock exitBlock = context.newBasicBlock("loop_exit");
+            BasicBlock headerBlock = context.newBasicBlock("whileCond");
+            BasicBlock bodyBlock = context.newBasicBlock("whileBody");
+            BasicBlock exitBlock = context.newBasicBlock("whileNext");
 
             builder.buildBranch(headerBlock);
             currentFunction.addBasicBlock(headerBlock);
@@ -415,9 +410,9 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 throw new RuntimeException("Error: break statement outside loop at line " + ctx.getStart().getLine());
             }
             builder.buildBranch(loopStack.peek().exitBlock);
-            BasicBlock afterBreak = context.newBasicBlock("after_break");
-            currentFunction.addBasicBlock(afterBreak);
-            builder.positionAfter(afterBreak);
+            //BasicBlock afterBreak = context.newBasicBlock("if_false");
+            //currentFunction.addBasicBlock(afterBreak);
+            //builder.positionAfter(afterBreak);
             return null;
         }
 
@@ -427,9 +422,9 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 throw new RuntimeException("Error: continue statement outside loop at line " + ctx.getStart().getLine());
             }
             builder.buildBranch(loopStack.peek().headerBlock);
-            BasicBlock afterContinue = context.newBasicBlock("after_continue");
+            /*BasicBlock afterContinue = context.newBasicBlock("after_continue");
             currentFunction.addBasicBlock(afterContinue);
-            builder.positionAfter(afterContinue);
+            builder.positionAfter(afterContinue);*/
             return null;
         }
 
@@ -437,7 +432,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         if (ctx.lVal() != null && ctx.ASSIGN() != null) {
             Value lValPtr = visit(ctx.lVal());
             Value rVal = visit(ctx.exp());
-            builder.buildStore(rVal, lValPtr);
+            builder.buildStore(lValPtr, rVal);
             return null;
         }
 
@@ -780,7 +775,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                     throw new RuntimeException("Error: Comparison operands must be i32 at line " + ctx.getStart().getLine());
                 }
 
-                IntPredicate pred;
+                IntPredicate pred;//TODO
                 String opName;
                 if (ctx.LT() != null) {
                     pred = IntPredicate.SignedLessThan;
@@ -807,7 +802,9 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 Value cmp = builder.buildIntCompare(pred, lhs, rhs, new Some<>(opName));
                 //System.err.println("Debug: visitCond cmp class: " + cmp.getClass().getName() +
                 //        ", type: " + cmp.getType().getAsString());
-                return cmp;
+                Value zext = builder.buildZeroExt(cmp, context.getInt32Type(), new Some<>(opName + "_zext"));
+                ConstantInt zero = context.getInt32Type().getConstant(0, true);
+                return builder.buildIntCompare(IntPredicate.NotEqual, zext, zero, new Some<>(opName + "_cond"));
             } else if (ctx.cond().size() == 2 && (ctx.AND() != null || ctx.OR() != null)) {
                 if (ctx.AND() != null) {
                     BasicBlock entryBlock = builder.getInsertionBlock().unwrap();
