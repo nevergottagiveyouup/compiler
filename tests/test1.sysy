@@ -8,5 +8,5 @@ int main() {
         if (a < -20)
             break;
     }
-    return count;
+    return 1;
 }
