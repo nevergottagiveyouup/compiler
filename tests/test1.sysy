@@ -1,5 +1,12 @@
-const int g = 1;
-int main(){
-    int a=2;
-    return a;
+int a = 0;
+int count = 0;
+
+int main() {
+    while (a <= 0) {
+        a = a - 1;
+        count = count + 1;
+        if (a < -20)
+            break;
+    }
+    return count;
 }

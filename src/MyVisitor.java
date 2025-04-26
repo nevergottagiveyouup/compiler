@@ -58,7 +58,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         builder = context.newIRBuilder();
         // 初始化全局作用域
         scopeStack.push(new HashMap<>());
-        //System.err.println("Debug: MyVisitor initialized, scopeStack size: " + scopeStack.size());
+        System.err.println("Debug: MyVisitor initialized, scopeStack size: " + scopeStack.size());
     }
 
     // 辅助方法：获取基本块的终止指令
@@ -93,18 +93,18 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
     @Override
     public Value visitCompUnit(SysYParser.CompUnitContext ctx) {
         // 调试：输出 scopeStack 状态
-        //System.err.println("Debug: visitCompUnit start, scopeStack size: " + scopeStack.size());
+        System.err.println("Debug: visitCompUnit start, scopeStack size: " + scopeStack.size());
 
         for (SysYParser.DeclContext decl : ctx.decl()) {
-            //System.err.println("Debug: visitCompUnit processing decl at line: " + decl.getStart().getLine());
+            System.err.println("Debug: visitCompUnit processing decl at line: " + decl.getStart().getLine());
             visit(decl);
         }
         for (SysYParser.FuncDefContext funcDef : ctx.funcDef()) {
-            //System.err.println("Debug: visitCompUnit processing funcDef: " + funcDef.IDENT().getText());
+            System.err.println("Debug: visitCompUnit processing funcDef: " + funcDef.IDENT().getText());
             visit(funcDef);
         }
 
-        //System.err.println("Debug: visitCompUnit end, scopeStack size: " + scopeStack.size());
+        System.err.println("Debug: visitCompUnit end, scopeStack size: " + scopeStack.size());
         return null;
     }
 
@@ -114,8 +114,8 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         // 提取函数信息
         String funcName = ctx.IDENT().getText();
         Type returnType = visitFuncTypeCustom(ctx.funcType());
-        /*System.err.println("Debug: Function '" + funcName + "' returnType: " +
-                returnType.getClass().getSimpleName() + ", line: " + ctx.getStart().getLine());*/
+        System.err.println("Debug: Function '" + funcName + "' returnType: " +
+                returnType.getClass().getSimpleName() + ", line: " + ctx.getStart().getLine());
 
         // 验证 main 函数
         if (funcName.equals("main")) {
@@ -134,34 +134,34 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                         .collect(Collectors.toList()) : List.of();
         boolean isVariadic = false;
         FunctionType funcType = context.getFunctionType(returnType, paramTypes.toArray(new Type[0]), isVariadic);
-        //System.err.println("Debug: visitFuncDef funcType: " + funcType.getReturnType().getAsString());
+        System.err.println("Debug: visitFuncDef funcType: " + funcType.getReturnType().getAsString());
 
         Function func = module.addFunction(funcName, funcType);
-        /*System.err.println("Debug: visitFuncDef function created: " + func.getName() +
-                ", module: " + module.getModuleIdentifier());*/
+        System.err.println("Debug: visitFuncDef function created: " + func.getName() +
+                ", module: " + module.getModuleIdentifier());
 
         // 设置当前函数和类型
         Function prevFunction = currentFunction;
         FunctionType prevFunctionType = currentFunctionType;
         currentFunction = func;
         currentFunctionType = funcType;
-        /*System.err.println("Debug: visitFuncDef set currentFunctionType: " +
+        System.err.println("Debug: visitFuncDef set currentFunctionType: " +
                 currentFunctionType.getReturnType().getAsString() +
-                ", currentFunction: " + func.getName());*/
+                ", currentFunction: " + func.getName());
 
         // 创建 entry 基本块
         BasicBlock entry = context.newBasicBlock("entry");
         func.addBasicBlock(entry);
-        /*System.err.println("Debug: visitFuncDef added entry block: " + entry.getName() +
-                ", parent function: " + (entry.getFunction().isSome() ? entry.getFunction().unwrap().getName() : "none"));*/
+        System.err.println("Debug: visitFuncDef added entry block: " + entry.getName() +
+                ", parent function: " + (entry.getFunction().isSome() ? entry.getFunction().unwrap().getName() : "none"));
 
         builder.positionAfter(entry);
-        /*System.err.println("Debug: visitFuncDef builder insertion block: " +
-                (builder.getInsertionBlock().isSome() ? builder.getInsertionBlock().unwrap().getName() : "none"));*/
+        System.err.println("Debug: visitFuncDef builder insertion block: " +
+                (builder.getInsertionBlock().isSome() ? builder.getInsertionBlock().unwrap().getName() : "none"));
 
         // 初始化作用域
         scopeStack.push(new HashMap<>());
-        //System.err.println("Debug: visitFuncDef scopeStack push, size: " + scopeStack.size());
+        System.err.println("Debug: visitFuncDef scopeStack push, size: " + scopeStack.size());
 
         // 处理参数
         if (ctx.funcFParams() != null) {
@@ -190,16 +190,16 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
             } else {
                 ConstantInt defaultRet = context.getInt32Type().getConstant(0, true);
                 builder.buildReturn(new Some<>(defaultRet));
-                //System.err.println("Warning: Missing return in non-void function '" + funcName + "' at line " + ctx.getStart().getLine());
+                System.err.println("Warning: Missing return in non-void function '" + funcName + "' at line " + ctx.getStart().getLine());
             }
         }
 
         // 清理
         scopeStack.pop();
-        //System.err.println("Debug: visitFuncDef scopeStack pop, size: " + scopeStack.size());
+        System.err.println("Debug: visitFuncDef scopeStack pop, size: " + scopeStack.size());
         currentFunction = prevFunction;
         currentFunctionType = prevFunctionType;
-        //System.err.println("Debug: visitFuncDef cleared currentFunctionType and currentFunction");
+        System.err.println("Debug: visitFuncDef cleared currentFunctionType and currentFunction");
 
         // 验证函数属性
         if (!func.getName().equals(funcName) || func.getParameterCount() != paramTypes.size()) {
@@ -230,12 +230,12 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
 
     @Override
     public Value visitBlock(SysYParser.BlockContext ctx) {
-        /*System.err.println("Debug: visitBlock start, currentBlock: " +
+        System.err.println("Debug: visitBlock start, currentBlock: " +
                 (builder.getInsertionBlock().isSome() ? builder.getInsertionBlock().unwrap().getName() : "none") +
-                ", scopeStack size: " + scopeStack.size());*/
+                ", scopeStack size: " + scopeStack.size());
 
         scopeStack.push(new HashMap<>());
-        //System.err.println("Debug: visitBlock scopeStack push, size: " + scopeStack.size());
+        System.err.println("Debug: visitBlock scopeStack push, size: " + scopeStack.size());
 
         for (SysYParser.BlockItemContext item : ctx.blockItem()) {
             Option<BasicBlock> currentBlock = builder.getInsertionBlock();
@@ -243,22 +243,22 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 throw new RuntimeException("Error: No insertion block set at line " + item.getStart().getLine());
             }
             if (getTerminator(currentBlock.unwrap()).isSome()) {
-                //System.err.println("Debug: visitBlock skipping terminated block: " + currentBlock.unwrap().getName());
+                System.err.println("Debug: visitBlock skipping terminated block: " + currentBlock.unwrap().getName());
                 break;
             }
             if (item.decl() != null) {
-                //System.err.println("Debug: visitBlock processing decl at line: " + item.getStart().getLine());
+                System.err.println("Debug: visitBlock processing decl at line: " + item.getStart().getLine());
                 visit(item.decl());
             } else if (item.stmt() != null) {
-                //System.err.println("Debug: visitBlock processing stmt at line: " + item.getStart().getLine());
+                System.err.println("Debug: visitBlock processing stmt at line: " + item.getStart().getLine());
                 visit(item.stmt());
             }
         }
 
         scopeStack.pop();
-        /*System.err.println("Debug: visitBlock scopeStack pop, size: " + scopeStack.size() +
+        System.err.println("Debug: visitBlock scopeStack pop, size: " + scopeStack.size() +
                 ", currentBlock: " +
-                (builder.getInsertionBlock().isSome() ? builder.getInsertionBlock().unwrap().getName() : "none"));*/
+                (builder.getInsertionBlock().isSome() ? builder.getInsertionBlock().unwrap().getName() : "none"));
 
         return null;
     }
@@ -270,18 +270,19 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         throw new RuntimeException("Invalid block item at line " + ctx.getStart().getLine());
     }
 
+
     @Override
     public Value visitStmt(SysYParser.StmtContext ctx) {
-        /*System.err.println("Debug: visitStmt start, line: " + ctx.getStart().getLine() +
+        System.err.println("Debug: visitStmt start, line: " + ctx.getStart().getLine() +
                 ", currentBlock: " +
-                (builder.getInsertionBlock().isSome() ? builder.getInsertionBlock().unwrap().getName() : "none"));*/
+                (builder.getInsertionBlock().isSome() ? builder.getInsertionBlock().unwrap().getName() : "none"));
 
         Option<BasicBlock> currentBlock = builder.getInsertionBlock();
         if (currentBlock.isNone()) {
             throw new RuntimeException("Error: No insertion block set at line " + ctx.getStart().getLine());
         }
         if (getTerminator(currentBlock.unwrap()).isSome()) {
-            //System.err.println("Warning: Unreachable statement at line " + ctx.getStart().getLine());
+            System.err.println("Warning: Unreachable statement at line " + ctx.getStart().getLine());
             return null;
         }
 
@@ -291,8 +292,8 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 throw new RuntimeException("Error: No function defined for return statement at line " +
                         ctx.getStart().getLine());
             }
-            /*System.err.println("Debug: visitStmt function: " + currentFunction.getName() +
-                    ", returnType: " + currentFunctionType.getReturnType().getAsString());*/
+            System.err.println("Debug: visitStmt function: " + currentFunction.getName() +
+                    ", returnType: " + currentFunctionType.getReturnType().getAsString());
 
             Option<Value> retValue = ctx.exp() != null ? new Some<>(visit(ctx.exp())) : Option.empty();
             Type expectedType = currentFunctionType.getReturnType();
@@ -302,12 +303,12 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
             }
             if (!expectedType.isVoidType() && retValue.isNone()) {
                 retValue = new Some<>(context.getInt32Type().getConstant(0, true));
-                /*System.err.println("Warning: Non-void function missing return value at line " + ctx.getStart().getLine());*/
+                System.err.println("Warning: Non-void function missing return value at line " + ctx.getStart().getLine());
             }
             if (retValue.isSome()) {
                 Value value = retValue.unwrap();
-                /*System.err.println("Debug: visitStmt return value class: " + value.getClass().getName() +
-                        ", type: " + value.getType().getAsString());*/
+                System.err.println("Debug: visitStmt return value class: " + value.getClass().getName() +
+                        ", type: " + value.getType().getAsString());
                 if (!value.getType().getAsString().equals(expectedType.getAsString())) {
                     throw new RuntimeException("Error: Return value type " + value.getType().getAsString() +
                             " does not match expected type " + expectedType.getAsString() +
@@ -315,15 +316,150 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 }
             }
             builder.buildReturn(retValue);
-            //System.err.println("Debug: visitStmt built return instruction");
+            System.err.println("Debug: visitStmt built return instruction");
             return null;
         }
 
-        // ... 其他逻辑保持不变 ...
+        // 处理 if 和 if-else 语句
+        if (ctx.IF() != null) {
+            System.err.println("Debug: visitStmt if start, line: " + ctx.getStart().getLine());
+            Value cond = visit(ctx.cond());
+            System.err.println("Debug: visitStmt if cond class: " + cond.getClass().getName() +
+                    ", type: " + cond.getType().getAsString() +
+                    ", typeKind: " + cond.getType().getTypeKind());
 
-        //System.err.println("Debug: visitStmt end, line: " + ctx.getStart().getLine());
+            // 修改类型检查
+            if (cond.getType().getTypeKind() != TypeKind.Integer || !cond.getType().getAsString().equals("i1")) {
+                System.err.println("Debug: Type check failed - cond type: " + cond.getType().getClass().getName() +
+                        ", kind: " + cond.getType().getTypeKind() +
+                        ", string: " + cond.getType().getAsString());
+                throw new RuntimeException("Error: Condition must evaluate to i1 at line " + ctx.getStart().getLine());
+            }
+
+            BasicBlock thenBlock = context.newBasicBlock("then");
+            BasicBlock elseBlock = ctx.ELSE() != null ? context.newBasicBlock("else") : null;
+            BasicBlock mergeBlock = context.newBasicBlock("merge");
+
+            builder.buildConditionalBranch(cond, thenBlock, ctx.ELSE() != null ? elseBlock : mergeBlock);
+
+            currentFunction.addBasicBlock(thenBlock);
+            builder.positionAfter(thenBlock);
+            if (!ctx.stmt().isEmpty()) {
+                visit(ctx.stmt(0));
+            }
+            if (getTerminator(builder.getInsertionBlock().unwrap()).isNone()) {
+                builder.buildBranch(mergeBlock);
+            }
+
+            if (ctx.ELSE() != null) {
+                currentFunction.addBasicBlock(elseBlock);
+                builder.positionAfter(elseBlock);
+                if (ctx.stmt().size() > 1) {
+                    visit(ctx.stmt(1));
+                }
+                if (getTerminator(builder.getInsertionBlock().unwrap()).isNone()) {
+                    builder.buildBranch(mergeBlock);
+                }
+            }
+
+            currentFunction.addBasicBlock(mergeBlock);
+            builder.positionAfter(mergeBlock);
+            System.err.println("Debug: visitStmt if end, currentBlock: " +
+                    (builder.getInsertionBlock().isSome() ? builder.getInsertionBlock().unwrap().getName() : "none"));
+            return null;
+        }
+
+        // 处理 while 循环
+        if (ctx.WHILE() != null) {
+            BasicBlock headerBlock = context.newBasicBlock("loop_header");
+            BasicBlock bodyBlock = context.newBasicBlock("loop_body");
+            BasicBlock exitBlock = context.newBasicBlock("loop_exit");
+
+            builder.buildBranch(headerBlock);
+            currentFunction.addBasicBlock(headerBlock);
+            builder.positionAfter(headerBlock);
+            Value cond = visit(ctx.cond());
+            System.err.println("Debug: visitStmt while cond class: " + cond.getClass().getName() +
+                    ", type: " + cond.getType().getAsString() +
+                    ", typeKind: " + cond.getType().getTypeKind());
+
+            // 修改类型检查
+            if (cond.getType().getTypeKind() != TypeKind.Integer || !cond.getType().getAsString().equals("i1")) {
+                System.err.println("Debug: Type check failed - cond type: " + cond.getType().getClass().getName() +
+                        ", kind: " + cond.getType().getTypeKind() +
+                        ", string: " + cond.getType().getAsString());
+                throw new RuntimeException("Error: Condition must evaluate to i1 at line " + ctx.getStart().getLine());
+            }
+
+            builder.buildConditionalBranch(cond, bodyBlock, exitBlock);
+
+            currentFunction.addBasicBlock(bodyBlock);
+            builder.positionAfter(bodyBlock);
+            loopStack.push(new LoopContext(headerBlock, exitBlock));
+            if (!ctx.stmt().isEmpty()) {
+                visit(ctx.stmt(0)); // 访问 while 语句
+            }
+            loopStack.pop();
+            if (getTerminator(builder.getInsertionBlock().unwrap()).isNone()) {
+                builder.buildBranch(headerBlock);
+            }
+
+            currentFunction.addBasicBlock(exitBlock);
+            builder.positionAfter(exitBlock);
+            return null;
+        }
+
+        // 处理 break 语句
+        if (ctx.BREAK() != null) {
+            if (loopStack.isEmpty()) {
+                throw new RuntimeException("Error: break statement outside loop at line " + ctx.getStart().getLine());
+            }
+            builder.buildBranch(loopStack.peek().exitBlock);
+            BasicBlock afterBreak = context.newBasicBlock("after_break");
+            currentFunction.addBasicBlock(afterBreak);
+            builder.positionAfter(afterBreak);
+            return null;
+        }
+
+        // 处理 continue 语句
+        if (ctx.CONTINUE() != null) {
+            if (loopStack.isEmpty()) {
+                throw new RuntimeException("Error: continue statement outside loop at line " + ctx.getStart().getLine());
+            }
+            builder.buildBranch(loopStack.peek().headerBlock);
+            BasicBlock afterContinue = context.newBasicBlock("after_continue");
+            currentFunction.addBasicBlock(afterContinue);
+            builder.positionAfter(afterContinue);
+            return null;
+        }
+
+        // 处理赋值语句（lVal = exp;）
+        if (ctx.lVal() != null && ctx.ASSIGN() != null) {
+            Value lValPtr = visit(ctx.lVal());
+            Value rVal = visit(ctx.exp());
+            builder.buildStore(rVal, lValPtr);
+            return null;
+        }
+
+        // 处理表达式语句（exp; 或空语句 ;）
+        if (ctx.exp() != null || ctx.SEMICOLON() != null) {
+            if (ctx.exp() != null) {
+                visit(ctx.exp());
+            }
+            return null;
+        }
+
+        // 处理块语句
+        if (ctx.block() != null) {
+            visit(ctx.block());
+            return null;
+        }
+
+        System.err.println("Debug: visitStmt end, line: " + ctx.getStart().getLine());
         return null;
     }
+
+
 
     @Override
     public Value visitConstExp(SysYParser.ConstExpContext ctx) {
@@ -333,12 +469,12 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         isConstantEvaluation = originalIsConstantEvaluation;
 
         // 调试：输出 result 的详细信息
-        /*System.err.println("Debug: visitConstExp result class: " + result.getClass().getName() +
+        System.err.println("Debug: visitConstExp result class: " + result.getClass().getName() +
                 ", type: " + result.getType().getClass().getName() +
                 ", typeKind: " + result.getType().getTypeKind() +
                 ", typeString: " + result.getType().getAsString() +
                 ", value: " + (result instanceof ConstantInt ? ((ConstantInt) result).getSignExtendedValue() : "N/A") +
-                ", line: " + ctx.getStart().getLine());*/
+                ", line: " + ctx.getStart().getLine());
 
         if (!(result instanceof ConstantInt)) {
             throw new RuntimeException("Error: constExp 求值为非整数常量类型: " +
@@ -349,9 +485,9 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         Type resultType = intResult.getType();
 
         // 调试：输出 resultType 的详细信息
-        /*System.err.println("Debug: visitConstExp resultType class: " + resultType.getClass().getName() +
+        System.err.println("Debug: visitConstExp resultType class: " + resultType.getClass().getName() +
                 ", typeKind: " + resultType.getTypeKind() +
-                ", typeString: " + resultType.getAsString());*/
+                ", typeString: " + resultType.getAsString());
 
         if (resultType.getTypeKind() != TypeKind.Integer) {
             throw new RuntimeException("Error: constExp 求值为非整数类型: " +
@@ -366,9 +502,9 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
             long boolValue = intResult.getSignExtendedValue();
             Type i32Type = context.getInt32Type();
             // 调试：输出 i32Type 信息
-            /*System.err.println("Debug: visitConstExp i32Type class: " + i32Type.getClass().getName() +
+            System.err.println("Debug: visitConstExp i32Type class: " + i32Type.getClass().getName() +
                     ", typeKind: " + i32Type.getTypeKind() +
-                    ", typeString: " + i32Type.getAsString());*/
+                    ", typeString: " + i32Type.getAsString());
             if (i32Type.getTypeKind() != TypeKind.Integer || !i32Type.getAsString().equals("i32")) {
                 throw new RuntimeException("Error: context.getInt32Type() 返回无效类型: " +
                         i32Type.getAsString() + " at line " + ctx.getStart().getLine());
@@ -401,19 +537,14 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         if (isConstantEvaluation) {
             // --- 常量表达式模式 (Part 1) ---
             if (ctx.L_PAREN() != null && ctx.exp().size() == 1 && ctx.R_PAREN() != null) {
-                // 括号表达式：(exp)
                 return visit(ctx.exp(0));
             } else if (ctx.lVal() != null) {
-                // 左值在常量表达式中非法
                 throw new RuntimeException("Error: lVal is not allowed in constant expression at line " + ctx.getStart().getLine());
             } else if (ctx.number() != null) {
-                // 数字字面量
                 return visit(ctx.number());
             } else if (ctx.IDENT() != null && ctx.L_PAREN() != null) {
-                // 函数调用在常量表达式中非法
                 throw new RuntimeException("Error: Function call is not allowed in constant expression at line " + ctx.getStart().getLine());
             } else if (ctx.unaryOp() != null && ctx.exp().size() == 1) {
-                // 一元运算：+exp, -exp, !exp
                 Value operandVal = visit(ctx.exp(0));
                 if (!(operandVal instanceof ConstantInt)) {
                     throw new RuntimeException("Error: Unary operation operand is not an integer constant at line " + ctx.getStart().getLine());
@@ -423,25 +554,21 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 String opText = ctx.unaryOp().getText();
 
                 if (opText.equals("+")) {
-                    // 一元加：返回原值
                     return operand;
                 } else if (opText.equals("-")) {
-                    // 一元负：验证 i32，计算 -value
                     if (!(operandType instanceof IntegerType) || ((IntegerType) operandType).getTypeWidth() != 32) {
-                        throw new RuntimeException("Error: Unary minus applied to non-i32 constant integer type (width " + ((IntegerType) operandType).getTypeWidth() + ") at line " + ctx.getStart().getLine());
+                        throw new RuntimeException("Error: Unary minus applied to non-i32 constant integer type at line " + ctx.getStart().getLine());
                     }
                     long operandLong = operand.getSignExtendedValue();
                     long result = -operandLong;
                     return context.getInt32Type().getConstant(result, true);
                 } else if (opText.equals("!")) {
-                    // 逻辑非：非零变 0，零变 1，返回 i32（exp 上下文）
                     long operandLong = operand.getSignExtendedValue();
                     long result = (operandLong == 0) ? 1 : 0;
                     return context.getInt32Type().getConstant(result, true);
                 }
                 throw new RuntimeException("Error: Unknown unary operator in constant expression: " + opText + " at line " + ctx.getStart().getLine());
             } else if (ctx.exp().size() == 2 && (ctx.MUL() != null || ctx.DIV() != null || ctx.MOD() != null || ctx.PLUS() != null || ctx.MINUS() != null)) {
-                // 二元算术运算：exp * exp, exp / exp, exp % exp, exp + exp, exp - exp
                 Value lhsVal = visit(ctx.exp(0));
                 Value rhsVal = visit(ctx.exp(1));
                 if (!(lhsVal instanceof ConstantInt) || !(rhsVal instanceof ConstantInt)) {
@@ -480,22 +607,21 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
             }
             throw new RuntimeException("Error: Unexpected expression structure in constant evaluation mode at line " + ctx.getStart().getLine());
         } else {
-            // --- 运行时表达式模式 (Part 2+) ---
+            // --- 运行时表达式模式 ---
             if (ctx.L_PAREN() != null && ctx.exp().size() == 1 && ctx.R_PAREN() != null) {
-                // 括号表达式：(exp)
                 return visit(ctx.exp(0));
             } else if (ctx.lVal() != null) {
-                // 左值：加载变量值
                 Value ptr = visit(ctx.lVal());
-                if (!(ptr instanceof AllocaInstruction)) {
+                if (!(ptr instanceof AllocaInstruction || ptr instanceof GlobalVariable)) {
                     throw new RuntimeException("Error: lVal does not resolve to a valid pointer at line " + ctx.getStart().getLine());
+                }
+                if (!ptr.getType().isPointerType()) {
+                    throw new RuntimeException("Error: lVal type is not a pointer at line " + ctx.getStart().getLine());
                 }
                 return builder.buildLoad(ptr, new Some<>("load_" + ctx.lVal().IDENT().getText()));
             } else if (ctx.number() != null) {
-                // 数字字面量
                 return visit(ctx.number());
             } else if (ctx.IDENT() != null && ctx.L_PAREN() != null) {
-                // 函数调用：IDENT L_PAREN funcRParams? R_PAREN
                 String funcName = ctx.IDENT().getText();
                 Option<Function> funcOpt = module.getFunction(funcName);
                 if (funcOpt.isNone()) {
@@ -509,7 +635,6 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 }
                 return builder.buildCall(func, args.toArray(new Value[0]), new Some<>(funcName + "_call"));
             } else if (ctx.unaryOp() != null && ctx.exp().size() == 1) {
-                // 一元运算：+exp, -exp, !exp
                 Value operand = visit(ctx.exp(0));
                 String opText = ctx.unaryOp().getText();
                 if (opText.equals("+")) {
@@ -520,12 +645,10 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 } else if (opText.equals("!")) {
                     ConstantInt zero = context.getInt32Type().getConstant(0, true);
                     Value i1Result = builder.buildIntCompare(IntPredicate.Equal, operand, zero, new Some<>("not"));
-                    // 使用 buildZeroExt 实现零扩展（i1 到 i32）
                     return builder.buildZeroExt(i1Result, context.getInt32Type(), new Some<>("zext_not"));
                 }
                 throw new RuntimeException("Error: Unknown unary operator: " + opText + " at line " + ctx.getStart().getLine());
             } else if (ctx.exp().size() == 2 && (ctx.MUL() != null || ctx.DIV() != null || ctx.MOD() != null || ctx.PLUS() != null || ctx.MINUS() != null)) {
-                // 二元算术运算
                 Value lhs = visit(ctx.exp(0));
                 Value rhs = visit(ctx.exp(1));
                 if (ctx.MUL() != null) {
@@ -546,6 +669,8 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
 
     @Override
     public Value visitCond(SysYParser.CondContext ctx) {
+        System.err.println("Debug: visitCond start, line: " + ctx.getStart().getLine());
+
         if (isConstantEvaluation) {
             // --- 常量模式 ---
             if (ctx.exp() != null) {
@@ -560,6 +685,46 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 long value = exp.getSignExtendedValue();
                 return context.getInt32Type().getConstant(value != 0 ? 1 : 0, true);
             } else if (ctx.cond().size() == 2) {
+                // 比较表达式：cond (LT | GT | LE | GE | EQ | NEQ) cond
+                if (ctx.LT() != null || ctx.GT() != null || ctx.LE() != null || ctx.GE() != null || ctx.EQ() != null || ctx.NEQ() != null) {
+                    SysYParser.CondContext leftCond = ctx.cond(0);
+                    SysYParser.CondContext rightCond = ctx.cond(1);
+                    if (leftCond.exp() == null || rightCond.exp() == null) {
+                        throw new RuntimeException("Error: Comparison operands must be expressions at line " + ctx.getStart().getLine());
+                    }
+                    Value lhsVal = visit(leftCond.exp());
+                    Value rhsVal = visit(rightCond.exp());
+                    if (!(lhsVal instanceof ConstantInt) || !(rhsVal instanceof ConstantInt)) {
+                        throw new RuntimeException("Error: Condition operands are not constant integers at line " + ctx.getStart().getLine());
+                    }
+                    ConstantInt lhs = (ConstantInt) lhsVal;
+                    ConstantInt rhs = (ConstantInt) rhsVal;
+                    if (!(lhs.getType() instanceof IntegerType) || ((IntegerType) lhs.getType()).getTypeWidth() != 32 ||
+                            !(rhs.getType() instanceof IntegerType) || ((IntegerType) rhs.getType()).getTypeWidth() != 32) {
+                        throw new RuntimeException("Error: Condition operands are not i32 constants at line " + ctx.getStart().getLine());
+                    }
+                    long lhsLong = lhs.getSignExtendedValue();
+                    long rhsLong = rhs.getSignExtendedValue();
+                    long result;
+
+                    if (ctx.LT() != null) {
+                        result = lhsLong < rhsLong ? 1 : 0;
+                    } else if (ctx.GT() != null) {
+                        result = lhsLong > rhsLong ? 1 : 0;
+                    } else if (ctx.LE() != null) {
+                        result = lhsLong <= rhsLong ? 1 : 0;
+                    } else if (ctx.GE() != null) {
+                        result = lhsLong >= rhsLong ? 1 : 0;
+                    } else if (ctx.EQ() != null) {
+                        result = lhsLong == rhsLong ? 1 : 0;
+                    } else if (ctx.NEQ() != null) {
+                        result = lhsLong != rhsLong ? 1 : 0;
+                    } else {
+                        throw new RuntimeException("Error: Unknown comparison operator at line " + ctx.getStart().getLine());
+                    }
+                    return context.getInt32Type().getConstant(result, true);
+                }
+                // 逻辑运算：AND, OR
                 Value lhsVal = visit(ctx.cond(0));
                 Value rhsVal = visit(ctx.cond(1));
                 if (!(lhsVal instanceof ConstantInt) || !(rhsVal instanceof ConstantInt)) {
@@ -575,96 +740,76 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 long rhsLong = rhs.getSignExtendedValue();
                 long result;
 
-                if (ctx.LT() != null) {
-                    result = lhsLong < rhsLong ? 1 : 0;
-                } else if (ctx.GT() != null) {
-                    result = lhsLong > rhsLong ? 1 : 0;
-                } else if (ctx.LE() != null) {
-                    result = lhsLong <= rhsLong ? 1 : 0;
-                } else if (ctx.GE() != null) {
-                    result = lhsLong >= rhsLong ? 1 : 0;
-                } else if (ctx.EQ() != null) {
-                    result = lhsLong == rhsLong ? 1 : 0;
-                } else if (ctx.NEQ() != null) {
-                    result = lhsLong != rhsLong ? 1 : 0;
-                } else if (ctx.AND() != null) {
+                if (ctx.AND() != null) {
                     result = (lhsLong != 0 && rhsLong != 0) ? 1 : 0;
                 } else if (ctx.OR() != null) {
                     result = (lhsLong != 0 || rhsLong != 0) ? 1 : 0;
                 } else {
-                    throw new RuntimeException("Error: Unknown condition operator at line " + ctx.getStart().getLine());
+                    throw new RuntimeException("Error: Unknown logical operator at line " + ctx.getStart().getLine());
                 }
                 return context.getInt32Type().getConstant(result, true);
             }
             throw new RuntimeException("Error: Unexpected condition structure in constant evaluation mode at line " + ctx.getStart().getLine());
         } else {
             // --- 运行时模式 ---
-            if (ctx.exp() != null) {
-                Value expVal = visit(ctx.exp());
-                ConstantInt zero = context.getInt32Type().getConstant(0, true);
-                return builder.buildIntCompare(IntPredicate.NotEqual, expVal, zero, new Some<>("cond"));
-            } else if (ctx.cond().size() == 2) {
+            if (ctx.LT() != null || ctx.GT() != null || ctx.LE() != null || ctx.GE() != null || ctx.EQ() != null || ctx.NEQ() != null) {
+                // 比较表达式：cond (LT | GT | LE | GE | EQ | NEQ) cond
+                SysYParser.CondContext leftCond = ctx.cond(0);
+                SysYParser.CondContext rightCond = ctx.cond(1);
+                if (leftCond.exp() == null || rightCond.exp() == null) {
+                    throw new RuntimeException("Error: Comparison operands must be expressions at line " + ctx.getStart().getLine());
+                }
+                Value lhs = visit(leftCond.exp());
+                Value rhs = visit(rightCond.exp());
+                System.err.println("Debug: visitCond lhs class: " + lhs.getClass().getName() +
+                        ", type: " + lhs.getType().getAsString() +
+                        ", typeKind: " + lhs.getType().getTypeKind() +
+                        ", rhs class: " + rhs.getClass().getName() +
+                        ", type: " + rhs.getType().getAsString() +
+                        ", typeKind: " + rhs.getType().getTypeKind());
+
+                // 修改类型检查
+                if (lhs.getType().getTypeKind() != TypeKind.Integer || !lhs.getType().getAsString().equals("i32") ||
+                        rhs.getType().getTypeKind() != TypeKind.Integer || !rhs.getType().getAsString().equals("i32")) {
+                    System.err.println("Debug: Type check failed - lhs type: " + lhs.getType().getClass().getName() +
+                            ", kind: " + lhs.getType().getTypeKind() +
+                            ", string: " + lhs.getType().getAsString() +
+                            ", rhs type: " + rhs.getType().getClass().getName() +
+                            ", kind: " + rhs.getType().getTypeKind() +
+                            ", string: " + rhs.getType().getAsString());
+                    throw new RuntimeException("Error: Comparison operands must be i32 at line " + ctx.getStart().getLine());
+                }
+
+                IntPredicate pred;
+                String opName;
                 if (ctx.LT() != null) {
-                    Value lhs = visit(ctx.cond(0));
-                    if (lhs.getType().equals(context.getInt1Type())) {
-                        lhs = builder.buildZeroExt(lhs, context.getInt32Type(), new Some<>("zext_lhs"));
-                    }
-                    Value rhs = visit(ctx.cond(1));
-                    if (rhs.getType().equals(context.getInt1Type())) {
-                        rhs = builder.buildZeroExt(rhs, context.getInt32Type(), new Some<>("zext_rhs"));
-                    }
-                    return builder.buildIntCompare(IntPredicate.SignedLessThan, lhs, rhs, new Some<>("lt"));
+                    pred = IntPredicate.SignedLessThan;
+                    opName = "lt";
                 } else if (ctx.GT() != null) {
-                    Value lhs = visit(ctx.cond(0));
-                    if (lhs.getType().equals(context.getInt1Type())) {
-                        lhs = builder.buildZeroExt(lhs, context.getInt32Type(), new Some<>("zext_lhs"));
-                    }
-                    Value rhs = visit(ctx.cond(1));
-                    if (rhs.getType().equals(context.getInt1Type())) {
-                        rhs = builder.buildZeroExt(rhs, context.getInt32Type(), new Some<>("zext_rhs"));
-                    }
-                    return builder.buildIntCompare(IntPredicate.SignedGreaterThan, lhs, rhs, new Some<>("gt"));
+                    pred = IntPredicate.SignedGreaterThan;
+                    opName = "gt";
                 } else if (ctx.LE() != null) {
-                    Value lhs = visit(ctx.cond(0));
-                    if (lhs.getType().equals(context.getInt1Type())) {
-                        lhs = builder.buildZeroExt(lhs, context.getInt32Type(), new Some<>("zext_lhs"));
-                    }
-                    Value rhs = visit(ctx.cond(1));
-                    if (rhs.getType().equals(context.getInt1Type())) {
-                        rhs = builder.buildZeroExt(rhs, context.getInt32Type(), new Some<>("zext_rhs"));
-                    }
-                    return builder.buildIntCompare(IntPredicate.SignedLessEqual, lhs, rhs, new Some<>("le"));
+                    pred = IntPredicate.SignedLessEqual;
+                    opName = "le";
                 } else if (ctx.GE() != null) {
-                    Value lhs = visit(ctx.cond(0));
-                    if (lhs.getType().equals(context.getInt1Type())) {
-                        lhs = builder.buildZeroExt(lhs, context.getInt32Type(), new Some<>("zext_lhs"));
-                    }
-                    Value rhs = visit(ctx.cond(1));
-                    if (rhs.getType().equals(context.getInt1Type())) {
-                        rhs = builder.buildZeroExt(rhs, context.getInt32Type(), new Some<>("zext_rhs"));
-                    }
-                    return builder.buildIntCompare(IntPredicate.SignedGreaterEqual, lhs, rhs, new Some<>("ge"));
+                    pred = IntPredicate.SignedGreaterEqual;
+                    opName = "ge";
                 } else if (ctx.EQ() != null) {
-                    Value lhs = visit(ctx.cond(0));
-                    if (lhs.getType().equals(context.getInt1Type())) {
-                        lhs = builder.buildZeroExt(lhs, context.getInt32Type(), new Some<>("zext_lhs"));
-                    }
-                    Value rhs = visit(ctx.cond(1));
-                    if (rhs.getType().equals(context.getInt1Type())) {
-                        rhs = builder.buildZeroExt(rhs, context.getInt32Type(), new Some<>("zext_rhs"));
-                    }
-                    return builder.buildIntCompare(IntPredicate.Equal, lhs, rhs, new Some<>("eq"));
+                    pred = IntPredicate.Equal;
+                    opName = "eq";
                 } else if (ctx.NEQ() != null) {
-                    Value lhs = visit(ctx.cond(0));
-                    if (lhs.getType().equals(context.getInt1Type())) {
-                        lhs = builder.buildZeroExt(lhs, context.getInt32Type(), new Some<>("zext_lhs"));
-                    }
-                    Value rhs = visit(ctx.cond(1));
-                    if (rhs.getType().equals(context.getInt1Type())) {
-                        rhs = builder.buildZeroExt(rhs, context.getInt32Type(), new Some<>("zext_rhs"));
-                    }
-                    return builder.buildIntCompare(IntPredicate.NotEqual, lhs, rhs, new Some<>("neq"));
-                } else if (ctx.AND() != null) {
+                    pred = IntPredicate.NotEqual;
+                    opName = "neq";
+                } else {
+                    throw new RuntimeException("Error: Unknown comparison operator at line " + ctx.getStart().getLine());
+                }
+
+                Value cmp = builder.buildIntCompare(pred, lhs, rhs, new Some<>(opName));
+                System.err.println("Debug: visitCond cmp class: " + cmp.getClass().getName() +
+                        ", type: " + cmp.getType().getAsString());
+                return cmp;
+            } else if (ctx.cond().size() == 2 && (ctx.AND() != null || ctx.OR() != null)) {
+                if (ctx.AND() != null) {
                     BasicBlock entryBlock = builder.getInsertionBlock().unwrap();
                     Function func = entryBlock.getFunction().unwrap();
                     BasicBlock rhsBlock = new BasicBlock(LLVM.LLVMAppendBasicBlock(func.getRef(), "and_rhs"));
@@ -673,10 +818,16 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                     func.addBasicBlock(endBlock);
 
                     Value cond1 = visit(ctx.cond(0));
+                    if (!cond1.getType().equals(context.getInt1Type())) {
+                        throw new RuntimeException("Error: AND operand must be i1 at line " + ctx.getStart().getLine());
+                    }
                     builder.buildConditionalBranch(cond1, rhsBlock, endBlock);
 
                     builder.positionAfter(rhsBlock);
                     Value cond2 = visit(ctx.cond(1));
+                    if (!cond2.getType().equals(context.getInt1Type())) {
+                        throw new RuntimeException("Error: AND operand must be i1 at line " + ctx.getStart().getLine());
+                    }
                     builder.buildBranch(endBlock);
 
                     builder.positionAfter(endBlock);
@@ -695,10 +846,16 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                     func.addBasicBlock(endBlock);
 
                     Value cond1 = visit(ctx.cond(0));
+                    if (!cond1.getType().equals(context.getInt1Type())) {
+                        throw new RuntimeException("Error: OR operand must be i1 at line " + ctx.getStart().getLine());
+                    }
                     builder.buildConditionalBranch(cond1, endBlock, rhsBlock);
 
                     builder.positionAfter(rhsBlock);
                     Value cond2 = visit(ctx.cond(1));
+                    if (!cond2.getType().equals(context.getInt1Type())) {
+                        throw new RuntimeException("Error: OR operand must be i1 at line " + ctx.getStart().getLine());
+                    }
                     builder.buildBranch(endBlock);
 
                     builder.positionAfter(endBlock);
@@ -709,11 +866,23 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                     );
                     return phi;
                 }
+            } else if (ctx.exp() != null) {
+                Value expVal = visit(ctx.exp());
+                if (expVal.getType().getTypeKind() != TypeKind.Integer || !expVal.getType().getAsString().equals("i32")) {
+                    System.err.println("Debug: Type check failed - expVal type: " + expVal.getType().getClass().getName() +
+                            ", kind: " + expVal.getType().getTypeKind() +
+                            ", string: " + expVal.getType().getAsString());
+                    throw new RuntimeException("Error: Condition expression must be i32 at line " + ctx.getStart().getLine());
+                }
+                ConstantInt zero = context.getInt32Type().getConstant(0, true);
+                Value cmp = builder.buildIntCompare(IntPredicate.NotEqual, expVal, zero, new Some<>("cond"));
+                System.err.println("Debug: visitCond cmp class: " + cmp.getClass().getName() +
+                        ", type: " + cmp.getType().getAsString());
+                return cmp;
             }
             throw new RuntimeException("Error: Unexpected condition structure in runtime mode at line " + ctx.getStart().getLine());
         }
     }
-
 
     @Override
     public Value visitLVal(SysYParser.LValContext ctx) {
@@ -748,10 +917,10 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         Type i32Type = context.getInt32Type();
 
         // 调试：输出 i32Type 信息
-        /*System.err.println("Debug: visitNumber i32Type class: " + i32Type.getClass().getName() +
+        System.err.println("Debug: visitNumber i32Type class: " + i32Type.getClass().getName() +
                 ", typeKind: " + i32Type.getTypeKind() +
                 ", typeString: " + i32Type.getAsString() +
-                ", line: " + ctx.getStart().getLine());*/
+                ", line: " + ctx.getStart().getLine());
 
         if (i32Type.getTypeKind() != TypeKind.Integer || !i32Type.getAsString().equals("i32")) {
             throw new RuntimeException("Error: context.getInt32Type() 返回无效类型: " +
@@ -762,11 +931,11 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         ConstantInt constant = ((IntegerType) i32Type).getConstant(intValue, true);
 
         // 调试：输出返回值的详细信息
-        /*System.err.println("Debug: visitNumber return class: " + constant.getClass().getName() +
+        System.err.println("Debug: visitNumber return class: " + constant.getClass().getName() +
                 ", type: " + constant.getType().getClass().getName() +
                 ", typeKind: " + constant.getType().getTypeKind() +
                 ", typeString: " + constant.getType().getAsString() +
-                ", value: " + constant.getSignExtendedValue());*/
+                ", value: " + constant.getSignExtendedValue());
 
         return constant;
     }
@@ -812,8 +981,8 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
     @Override
     public Value visitDecl(SysYParser.DeclContext ctx) {
         // 调试：输出 decl 处理
-        /*System.err.println("Debug: visitDecl start, scopeStack size: " + scopeStack.size() +
-                ", line: " + ctx.getStart().getLine());*/
+        System.err.println("Debug: visitDecl start, scopeStack size: " + scopeStack.size() +
+                ", line: " + ctx.getStart().getLine());
 
         if (ctx.constDecl() != null) {
             visit(ctx.constDecl());
@@ -821,7 +990,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
             visit(ctx.varDecl());
         }
 
-        //System.err.println("Debug: visitDecl end, scopeStack size: " + scopeStack.size());
+        System.err.println("Debug: visitDecl end, scopeStack size: " + scopeStack.size());
         return null;
     }
 
@@ -832,8 +1001,8 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         Type varType = context.getInt32Type();
 
         // 调试：输出变量定义信息
-        /*System.err.println("Debug: visitVarDef varName: " + varName + ", isGlobal: " + isGlobal +
-                ", scopeStack size: " + scopeStack.size() + ", line: " + ctx.getStart().getLine());*/
+        System.err.println("Debug: visitVarDef varName: " + varName + ", isGlobal: " + isGlobal +
+                ", scopeStack size: " + scopeStack.size() + ", line: " + ctx.getStart().getLine());
 
         if (isGlobal) {
             Constant initConstant = null;
@@ -843,11 +1012,11 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 isConstantEvaluation = true;
                 Value initValue = visit(ctx.initVal());
 
-                /*System.err.println("Debug: visitVarDef initValue class: " + initValue.getClass().getName() +
+                System.err.println("Debug: visitVarDef initValue class: " + initValue.getClass().getName() +
                         ", type: " + initValue.getType().getClass().getName() +
                         ", typeKind: " + initValue.getType().getTypeKind() +
                         ", typeString: " + initValue.getType().getAsString() +
-                        ", value: " + (initValue instanceof ConstantInt ? ((ConstantInt) initValue).getSignExtendedValue() : "N/A"));*/
+                        ", value: " + (initValue instanceof ConstantInt ? ((ConstantInt) initValue).getSignExtendedValue() : "N/A"));
 
                 isConstantEvaluation = originalIsConstantEvaluation;
 
@@ -867,39 +1036,39 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 initConstant = context.getInt32Type().getConstant(0, true);
             }
 
-            /*System.err.println("Debug: visitVarDef initConstant class: " + initConstant.getClass().getName() +
-                    ", type: " + initConstant.getType().getAsString());*/
+            System.err.println("Debug: visitVarDef initConstant class: " + initConstant.getClass().getName() +
+                    ", type: " + initConstant.getType().getAsString());
 
             GlobalVariable global = module.addGlobalVariable(varName, varType, Option.empty()).unwrap();
-            /*System.err.println("Debug: visitVarDef global created, name: " + global.getName() +
-                    ", type: " + global.getType().getAsString());*/
+            System.err.println("Debug: visitVarDef global created, name: " + global.getName() +
+                    ", type: " + global.getType().getAsString());
 
             global.setInitializer(initConstant);
-            //System.err.println("Debug: visitVarDef global initializer set for " + varName);
+            System.err.println("Debug: visitVarDef global initializer set for " + varName);
 
             scopeStack.peek().put(varName, global);
             return global;
         } else {
             // 调试：检查 builder 状态
             Option<BasicBlock> currentBlock = builder.getInsertionBlock();
-            /*System.err.println("Debug: visitVarDef local, currentBlock: " +
-                    (currentBlock.isSome() ? currentBlock.unwrap().getName() : "none"));*/
+            System.err.println("Debug: visitVarDef local, currentBlock: " +
+                    (currentBlock.isSome() ? currentBlock.unwrap().getName() : "none"));
 
             if (currentBlock.isNone()) {
                 throw new RuntimeException("Error: No insertion block set for local variable '" + varName + "' at line " + ctx.getStart().getLine());
             }
 
             AllocaInstruction alloca = builder.buildAlloca(varType, new Some<>(varName));
-            /*System.err.println("Debug: visitVarDef alloca created, name: " + varName +
-                    ", type: " + varType.getAsString());*/
+            System.err.println("Debug: visitVarDef alloca created, name: " + varName +
+                    ", type: " + varType.getAsString());
 
             scopeStack.peek().put(varName, alloca);
 
             if (ctx.initVal() != null) {
                 Value initValue = visit(ctx.initVal());
                 builder.buildStore(alloca, initValue);
-                /*System.err.println("Debug: visitVarDef store initValue class: " + initValue.getClass().getName() +
-                        ", type: " + initValue.getType().getAsString());*/
+                System.err.println("Debug: visitVarDef store initValue class: " + initValue.getClass().getName() +
+                        ", type: " + initValue.getType().getAsString());
             }
 
             return alloca;
@@ -915,8 +1084,8 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         Type constType = context.getInt32Type();
 
         // 调试：输出常量定义的上下文
-        /*System.err.println("Debug: visitConstDef varName: " + varName + ", isGlobal: " + isGlobal +
-                ", line: " + ctx.getStart().getLine());*/
+        System.err.println("Debug: visitConstDef varName: " + varName + ", isGlobal: " + isGlobal +
+                ", line: " + ctx.getStart().getLine());
 
         // 常量初始化值必须是常量表达式
         boolean originalIsConstantEvaluation = isConstantEvaluation;
@@ -925,11 +1094,11 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         isConstantEvaluation = originalIsConstantEvaluation;
 
         // 调试：输出 initValue 的详细信息
-        /*System.err.println("Debug: visitConstDef initValue class: " + initValue.getClass().getName() +
+        System.err.println("Debug: visitConstDef initValue class: " + initValue.getClass().getName() +
                 ", type: " + initValue.getType().getClass().getName() +
                 ", typeKind: " + initValue.getType().getTypeKind() +
                 ", typeString: " + initValue.getType().getAsString() +
-                ", value: " + (initValue instanceof ConstantInt ? ((ConstantInt) initValue).getSignExtendedValue() : "N/A"));*/
+                ", value: " + (initValue instanceof ConstantInt ? ((ConstantInt) initValue).getSignExtendedValue() : "N/A"));
 
         // 验证 initValue 是 ConstantInt
         if (!(initValue instanceof ConstantInt)) {
@@ -941,9 +1110,9 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         Type valueType = constInt.getType();
 
         // 调试：输出 valueType 的详细信息
-        /*System.err.println("Debug: visitConstDef valueType class: " + valueType.getClass().getName() +
+        System.err.println("Debug: visitConstDef valueType class: " + valueType.getClass().getName() +
                 ", typeKind: " + valueType.getTypeKind() +
-                ", typeString: " + valueType.getAsString());*/
+                ", typeString: " + valueType.getAsString());
 
         // 使用 getTypeKind 和 getAsString 验证类型
         if (valueType.getTypeKind() != TypeKind.Integer || !valueType.getAsString().equals("i32")) {
@@ -975,14 +1144,14 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
     @Override
     public Value visitVarDecl(SysYParser.VarDeclContext ctx) {
         // 调试：输出 varDecl 处理
-        /*System.err.println("Debug: visitVarDecl start, scopeStack size: " + scopeStack.size() +
-                ", line: " + ctx.getStart().getLine());*/
+        System.err.println("Debug: visitVarDecl start, scopeStack size: " + scopeStack.size() +
+                ", line: " + ctx.getStart().getLine());
 
         for (SysYParser.VarDefContext varDef : ctx.varDef()) {
             visit(varDef);
         }
 
-        //System.err.println("Debug: visitVarDecl end, scopeStack size: " + scopeStack.size());
+        System.err.println("Debug: visitVarDecl end, scopeStack size: " + scopeStack.size());
         return null;
     }
 
@@ -1000,12 +1169,12 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         Value value = visit(ctx.constExp());
 
         // 调试：输出 value 的详细信息
-        /*System.err.println("Debug: visitConstInitVal value class: " + value.getClass().getName() +
+        System.err.println("Debug: visitConstInitVal value class: " + value.getClass().getName() +
                 ", type: " + value.getType().getClass().getName() +
                 ", typeKind: " + value.getType().getTypeKind() +
                 ", typeString: " + value.getType().getAsString() +
                 ", value: " + (value instanceof ConstantInt ? ((ConstantInt) value).getSignExtendedValue() : "N/A") +
-                ", line: " + ctx.getStart().getLine());*/
+                ", line: " + ctx.getStart().getLine());
 
         return value;
     }
