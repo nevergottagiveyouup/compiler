@@ -58,7 +58,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         builder = context.newIRBuilder();
         // 初始化全局作用域
         scopeStack.push(new HashMap<>());
-        System.err.println("Debug: MyVisitor initialized, scopeStack size: " + scopeStack.size());
+        //System.err.println("Debug: MyVisitor initialized, scopeStack size: " + scopeStack.size());
     }
 
     // 辅助方法：获取基本块的终止指令
@@ -93,18 +93,18 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
     @Override
     public Value visitCompUnit(SysYParser.CompUnitContext ctx) {
         // 调试：输出 scopeStack 状态
-        System.err.println("Debug: visitCompUnit start, scopeStack size: " + scopeStack.size());
+        //System.err.println("Debug: visitCompUnit start, scopeStack size: " + scopeStack.size());
 
         for (SysYParser.DeclContext decl : ctx.decl()) {
-            System.err.println("Debug: visitCompUnit processing decl at line: " + decl.getStart().getLine());
+            //System.err.println("Debug: visitCompUnit processing decl at line: " + decl.getStart().getLine());
             visit(decl);
         }
         for (SysYParser.FuncDefContext funcDef : ctx.funcDef()) {
-            System.err.println("Debug: visitCompUnit processing funcDef: " + funcDef.IDENT().getText());
+            //System.err.println("Debug: visitCompUnit processing funcDef: " + funcDef.IDENT().getText());
             visit(funcDef);
         }
 
-        System.err.println("Debug: visitCompUnit end, scopeStack size: " + scopeStack.size());
+        //System.err.println("Debug: visitCompUnit end, scopeStack size: " + scopeStack.size());
         return null;
     }
 
@@ -114,8 +114,8 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         // 提取函数信息
         String funcName = ctx.IDENT().getText();
         Type returnType = visitFuncTypeCustom(ctx.funcType());
-        System.err.println("Debug: Function '" + funcName + "' returnType: " +
-                returnType.getClass().getSimpleName() + ", line: " + ctx.getStart().getLine());
+        /*System.err.println("Debug: Function '" + funcName + "' returnType: " +
+                returnType.getClass().getSimpleName() + ", line: " + ctx.getStart().getLine());*/
 
         // 验证 main 函数
         if (funcName.equals("main")) {
@@ -134,34 +134,34 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                         .collect(Collectors.toList()) : List.of();
         boolean isVariadic = false;
         FunctionType funcType = context.getFunctionType(returnType, paramTypes.toArray(new Type[0]), isVariadic);
-        System.err.println("Debug: visitFuncDef funcType: " + funcType.getReturnType().getAsString());
+        //System.err.println("Debug: visitFuncDef funcType: " + funcType.getReturnType().getAsString());
 
         Function func = module.addFunction(funcName, funcType);
-        System.err.println("Debug: visitFuncDef function created: " + func.getName() +
-                ", module: " + module.getModuleIdentifier());
+        /*System.err.println("Debug: visitFuncDef function created: " + func.getName() +
+                ", module: " + module.getModuleIdentifier());*/
 
         // 设置当前函数和类型
         Function prevFunction = currentFunction;
         FunctionType prevFunctionType = currentFunctionType;
         currentFunction = func;
         currentFunctionType = funcType;
-        System.err.println("Debug: visitFuncDef set currentFunctionType: " +
+        /*System.err.println("Debug: visitFuncDef set currentFunctionType: " +
                 currentFunctionType.getReturnType().getAsString() +
-                ", currentFunction: " + func.getName());
+                ", currentFunction: " + func.getName());*/
 
         // 创建 entry 基本块
         BasicBlock entry = context.newBasicBlock("entry");
         func.addBasicBlock(entry);
-        System.err.println("Debug: visitFuncDef added entry block: " + entry.getName() +
-                ", parent function: " + (entry.getFunction().isSome() ? entry.getFunction().unwrap().getName() : "none"));
+        /*System.err.println("Debug: visitFuncDef added entry block: " + entry.getName() +
+                ", parent function: " + (entry.getFunction().isSome() ? entry.getFunction().unwrap().getName() : "none"));*/
 
         builder.positionAfter(entry);
-        System.err.println("Debug: visitFuncDef builder insertion block: " +
-                (builder.getInsertionBlock().isSome() ? builder.getInsertionBlock().unwrap().getName() : "none"));
+        /*System.err.println("Debug: visitFuncDef builder insertion block: " +
+                (builder.getInsertionBlock().isSome() ? builder.getInsertionBlock().unwrap().getName() : "none"));*/
 
         // 初始化作用域
         scopeStack.push(new HashMap<>());
-        System.err.println("Debug: visitFuncDef scopeStack push, size: " + scopeStack.size());
+        //System.err.println("Debug: visitFuncDef scopeStack push, size: " + scopeStack.size());
 
         // 处理参数
         if (ctx.funcFParams() != null) {
@@ -190,16 +190,16 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
             } else {
                 ConstantInt defaultRet = context.getInt32Type().getConstant(0, true);
                 builder.buildReturn(new Some<>(defaultRet));
-                System.err.println("Warning: Missing return in non-void function '" + funcName + "' at line " + ctx.getStart().getLine());
+                //System.err.println("Warning: Missing return in non-void function '" + funcName + "' at line " + ctx.getStart().getLine());
             }
         }
 
         // 清理
         scopeStack.pop();
-        System.err.println("Debug: visitFuncDef scopeStack pop, size: " + scopeStack.size());
+        //System.err.println("Debug: visitFuncDef scopeStack pop, size: " + scopeStack.size());
         currentFunction = prevFunction;
         currentFunctionType = prevFunctionType;
-        System.err.println("Debug: visitFuncDef cleared currentFunctionType and currentFunction");
+        //System.err.println("Debug: visitFuncDef cleared currentFunctionType and currentFunction");
 
         // 验证函数属性
         if (!func.getName().equals(funcName) || func.getParameterCount() != paramTypes.size()) {
@@ -925,11 +925,11 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         isConstantEvaluation = originalIsConstantEvaluation;
 
         // 调试：输出 initValue 的详细信息
-        System.err.println("Debug: visitConstDef initValue class: " + initValue.getClass().getName() +
+        /*System.err.println("Debug: visitConstDef initValue class: " + initValue.getClass().getName() +
                 ", type: " + initValue.getType().getClass().getName() +
                 ", typeKind: " + initValue.getType().getTypeKind() +
                 ", typeString: " + initValue.getType().getAsString() +
-                ", value: " + (initValue instanceof ConstantInt ? ((ConstantInt) initValue).getSignExtendedValue() : "N/A"));
+                ", value: " + (initValue instanceof ConstantInt ? ((ConstantInt) initValue).getSignExtendedValue() : "N/A"));*/
 
         // 验证 initValue 是 ConstantInt
         if (!(initValue instanceof ConstantInt)) {
