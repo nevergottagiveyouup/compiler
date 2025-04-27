@@ -662,12 +662,12 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         }
     }
 
+
+
     @Override
     public Value visitCond(SysYParser.CondContext ctx) {
-        //System.err.println("Debug: visitCond start, line: " + ctx.getStart().getLine());
-
         if (isConstantEvaluation) {
-            // --- 常量模式 ---
+            // 常量模式保持不变
             if (ctx.exp() != null) {
                 Value expVal = visit(ctx.exp());
                 if (!(expVal instanceof ConstantInt)) {
@@ -680,7 +680,6 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 long value = exp.getSignExtendedValue();
                 return context.getInt32Type().getConstant(value != 0 ? 1 : 0, true);
             } else if (ctx.cond().size() == 2) {
-                // 比较表达式：cond (LT | GT | LE | GE | EQ | NEQ) cond
                 if (ctx.LT() != null || ctx.GT() != null || ctx.LE() != null || ctx.GE() != null || ctx.EQ() != null || ctx.NEQ() != null) {
                     SysYParser.CondContext leftCond = ctx.cond(0);
                     SysYParser.CondContext rightCond = ctx.cond(1);
@@ -701,7 +700,6 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                     long lhsLong = lhs.getSignExtendedValue();
                     long rhsLong = rhs.getSignExtendedValue();
                     long result;
-
                     if (ctx.LT() != null) {
                         result = lhsLong < rhsLong ? 1 : 0;
                     } else if (ctx.GT() != null) {
@@ -719,7 +717,6 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                     }
                     return context.getInt32Type().getConstant(result, true);
                 }
-                // 逻辑运算：AND, OR
                 Value lhsVal = visit(ctx.cond(0));
                 Value rhsVal = visit(ctx.cond(1));
                 if (!(lhsVal instanceof ConstantInt) || !(rhsVal instanceof ConstantInt)) {
@@ -734,7 +731,6 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 long lhsLong = lhs.getSignExtendedValue();
                 long rhsLong = rhs.getSignExtendedValue();
                 long result;
-
                 if (ctx.AND() != null) {
                     result = (lhsLong != 0 && rhsLong != 0) ? 1 : 0;
                 } else if (ctx.OR() != null) {
@@ -746,87 +742,136 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
             }
             throw new RuntimeException("Error: Unexpected condition structure in constant evaluation mode at line " + ctx.getStart().getLine());
         } else {
-            // --- 运行时模式 ---
+            // 运行时模式
             if (ctx.LT() != null || ctx.GT() != null || ctx.LE() != null || ctx.GE() != null || ctx.EQ() != null || ctx.NEQ() != null) {
-                // 比较表达式：cond (LT | GT | LE | GE | EQ | NEQ) cond
                 SysYParser.CondContext leftCond = ctx.cond(0);
                 SysYParser.CondContext rightCond = ctx.cond(1);
-                if (leftCond.exp() == null || rightCond.exp() == null) {
-                    throw new RuntimeException("Error: Comparison operands must be expressions at line " + ctx.getStart().getLine());
-                }
-                Value lhs = visit(leftCond.exp());
-                Value rhs = visit(rightCond.exp());
-                //System.err.println("Debug: visitCond lhs class: " + lhs.getClass().getName() +
-                //        ", type: " + lhs.getType().getAsString() +
-                //        ", typeKind: " + lhs.getType().getTypeKind() +
-                //        ", rhs class: " + rhs.getClass().getName() +
-                //        ", type: " + rhs.getType().getAsString() +
-                //        ", typeKind: " + rhs.getType().getTypeKind());
 
-                // 修改类型检查
-                if (lhs.getType().getTypeKind() != TypeKind.Integer || !lhs.getType().getAsString().equals("i32") ||
-                        rhs.getType().getTypeKind() != TypeKind.Integer || !rhs.getType().getAsString().equals("i32")) {
-                    //System.err.println("Debug: Type check failed - lhs type: " + lhs.getType().getClass().getName() +
-                    //        ", kind: " + lhs.getType().getTypeKind() +
-                    //        ", string: " + lhs.getType().getAsString() +
-                    //        ", rhs type: " + rhs.getType().getClass().getName() +
-                    //        ", kind: " + rhs.getType().getTypeKind() +
-                    //        ", string: " + rhs.getType().getAsString());
-                    throw new RuntimeException("Error: Comparison operands must be i32 at line " + ctx.getStart().getLine());
-                }
+                // 处理嵌套比较（如 (a > b) > c）
+                if (leftCond.cond().size() > 0) {
+                    // 收集链式比较的操作数
+                    List<Value> operands = new ArrayList<>();
+                    List<IntPredicate> predicates = new ArrayList<>();
+                    collectChainedComparisons(ctx, operands, predicates);
 
-                IntPredicate pred;//TODO
-                String opName;
-                if (ctx.LT() != null) {
-                    pred = IntPredicate.SignedLessThan;
-                    opName = "lt";
-                } else if (ctx.GT() != null) {
-                    pred = IntPredicate.SignedGreaterThan;
-                    opName = "gt";
-                } else if (ctx.LE() != null) {
-                    pred = IntPredicate.SignedLessEqual;
-                    opName = "le";
-                } else if (ctx.GE() != null) {
-                    pred = IntPredicate.SignedGreaterEqual;
-                    opName = "ge";
-                } else if (ctx.EQ() != null) {
-                    pred = IntPredicate.Equal;
-                    opName = "eq";
-                } else if (ctx.NEQ() != null) {
-                    pred = IntPredicate.NotEqual;
-                    opName = "neq";
+                    BasicBlock entryBlock = builder.getInsertionBlock().unwrap();
+                    Function func = entryBlock.getFunction().unwrap();
+                    BasicBlock endBlock = context.newBasicBlock("cmp_end");
+                    func.addBasicBlock(endBlock);
+                    List<BasicBlock> compareBlocks = new ArrayList<>();
+                    List<Value> compareResults = new ArrayList<>();
+
+                    BasicBlock currentBlock = entryBlock;
+                    Value prevResult = null;
+                    for (int i = 0; i < operands.size() - 1; i++) {
+                        BasicBlock cmpBlock = context.newBasicBlock("cmp_next_" + (i + 1));
+                        func.addBasicBlock(cmpBlock);
+                        compareBlocks.add(cmpBlock);
+
+                        builder.positionAfter(currentBlock);
+                        Value lhs;
+                        if (i == 0) {
+                            lhs = operands.get(i);
+                        } else {
+                            lhs = builder.buildZeroExt(prevResult, context.getInt32Type(), new Some<>("cond_"));
+                        }
+                        Value rhs = operands.get(i + 1);
+                        IntPredicate pred = predicates.get(i);
+                        Value cmp = builder.buildIntCompare(pred, lhs, rhs, new Some<>("cond_"));
+                        compareResults.add(cmp);
+                        prevResult = cmp;
+
+                        builder.buildConditionalBranch(cmp, cmpBlock, endBlock);
+                        currentBlock = cmpBlock;
+                    }
+
+                    builder.positionAfter(currentBlock);
+                    builder.buildBranch(endBlock);
+
+                    builder.positionAfter(endBlock);
+                    PhiInstruction phi = builder.buildPhi(context.getInt1Type(), new Some<>("cond_"));
+                    List<Pair<BasicBlock, Value>> incoming = new ArrayList<>();
+                    incoming.add(new Pair<>(entryBlock, context.getInt1Type().getConstant(0, true)));
+                    for (int i = 0; i < compareBlocks.size() - 1; i++) {
+                        incoming.add(new Pair<>(compareBlocks.get(i), context.getInt1Type().getConstant(0, true)));
+                    }
+                    if (!compareBlocks.isEmpty()) {
+                        incoming.add(new Pair<>(compareBlocks.get(compareBlocks.size() - 1), compareResults.get(compareResults.size() - 1)));
+                    }
+                    phi.addIncoming(incoming.toArray(new Pair[0]));
+                    return phi;
                 } else {
-                    throw new RuntimeException("Error: Unknown comparison operator at line " + ctx.getStart().getLine());
-                }
+                    // 简单比较（如 change() > 0）
+                    Value lhs;
+                    if (leftCond.exp() != null) {
+                        lhs = visit(leftCond.exp());
+                        if (lhs.getType().getTypeKind() != TypeKind.Integer || !lhs.getType().getAsString().equals("i32")) {
+                            throw new RuntimeException("Error: Left comparison operand must be i32 at line " + ctx.getStart().getLine());
+                        }
+                    } else {
+                        throw new RuntimeException("Error: Left comparison operand must be expression at line " + ctx.getStart().getLine());
+                    }
 
-                Value cmp = builder.buildIntCompare(pred, lhs, rhs, new Some<>(opName));
-                //System.err.println("Debug: visitCond cmp class: " + cmp.getClass().getName() +
-                //        ", type: " + cmp.getType().getAsString());
-                Value zext = builder.buildZeroExt(cmp, context.getInt32Type(), new Some<>(opName + "_zext"));
-                ConstantInt zero = context.getInt32Type().getConstant(0, true);
-                return builder.buildIntCompare(IntPredicate.NotEqual, zext, zero, new Some<>(opName + "_cond"));
+                    Value rhs;
+                    if (rightCond.exp() != null) {
+                        rhs = visit(rightCond.exp());
+                        if (rhs.getType().getTypeKind() != TypeKind.Integer || !rhs.getType().getAsString().equals("i32")) {
+                            throw new RuntimeException("Error: Right comparison operand must be i32 at line " + ctx.getStart().getLine());
+                        }
+                    } else {
+                        throw new RuntimeException("Error: Right comparison operand must be expression at line " + ctx.getStart().getLine());
+                    }
+
+                    IntPredicate pred;
+                    String opName = "cond_";
+                    if (ctx.LT() != null) {
+                        pred = IntPredicate.SignedLessThan;
+                    } else if (ctx.GT() != null) {
+                        pred = IntPredicate.SignedGreaterThan;
+                    } else if (ctx.LE() != null) {
+                        pred = IntPredicate.SignedLessEqual;
+                    } else if (ctx.GE() != null) {
+                        pred = IntPredicate.SignedGreaterEqual;
+                    } else if (ctx.EQ() != null) {
+                        pred = IntPredicate.Equal;
+                    } else if (ctx.NEQ() != null) {
+                        pred = IntPredicate.NotEqual;
+                    } else {
+                        throw new RuntimeException("Error: Unknown comparison operator at line " + ctx.getStart().getLine());
+                    }
+                    return builder.buildIntCompare(pred, lhs, rhs, new Some<>(opName));
+                }
             } else if (ctx.cond().size() == 2 && (ctx.AND() != null || ctx.OR() != null)) {
                 if (ctx.AND() != null) {
                     BasicBlock entryBlock = builder.getInsertionBlock().unwrap();
                     Function func = entryBlock.getFunction().unwrap();
-                    BasicBlock rhsBlock = new BasicBlock(LLVM.LLVMAppendBasicBlock(func.getRef(), "and_rhs"));
+                    BasicBlock rhsBlock = context.newBasicBlock("and_rhs");
                     func.addBasicBlock(rhsBlock);
-                    BasicBlock endBlock = new BasicBlock(LLVM.LLVMAppendBasicBlock(func.getRef(), "and_end"));
+                    BasicBlock endBlock = context.newBasicBlock("and_end");
                     func.addBasicBlock(endBlock);
 
+                    // 处理左操作数
                     Value cond1 = visit(ctx.cond(0));
-                    if (!cond1.getType().equals(context.getInt1Type())) {
-                        throw new RuntimeException("Error: AND operand must be i1 at line " + ctx.getStart().getLine());
+                    if (cond1.getType().equals(context.getInt32Type())) {
+                        ConstantInt zero = context.getInt32Type().getConstant(0, true);
+                        cond1 = builder.buildIntCompare(IntPredicate.NotEqual, cond1, zero, new Some<>("cond_"));
+                    } else if (!cond1.getType().equals(context.getInt1Type())) {
+                        throw new RuntimeException("Error: AND operand must be i1 or i32 at line " + ctx.getStart().getLine());
                     }
                     builder.buildConditionalBranch(cond1, rhsBlock, endBlock);
 
+                    // 处理右操作数
                     builder.positionAfter(rhsBlock);
                     Value cond2 = visit(ctx.cond(1));
-                    if (!cond2.getType().equals(context.getInt1Type())) {
-                        throw new RuntimeException("Error: AND operand must be i1 at line " + ctx.getStart().getLine());
+                    if (cond2.getType().equals(context.getInt32Type())) {
+                        ConstantInt zero = context.getInt32Type().getConstant(0, true);
+                        cond2 = builder.buildIntCompare(IntPredicate.NotEqual, cond2, zero, new Some<>("cond_"));
+                    } else if (!cond2.getType().equals(context.getInt1Type())) {
+                        throw new RuntimeException("Error: AND operand must be i1 or i32 at line " + ctx.getStart().getLine());
                     }
                     builder.buildBranch(endBlock);
 
+                    // 回填
                     builder.positionAfter(endBlock);
                     PhiInstruction phi = builder.buildPhi(context.getInt1Type(), new Some<>("and_result"));
                     phi.addIncoming(
@@ -837,24 +882,33 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 } else if (ctx.OR() != null) {
                     BasicBlock entryBlock = builder.getInsertionBlock().unwrap();
                     Function func = entryBlock.getFunction().unwrap();
-                    BasicBlock rhsBlock = new BasicBlock(LLVM.LLVMAppendBasicBlock(func.getRef(), "or_rhs"));
+                    BasicBlock rhsBlock = context.newBasicBlock("or_rhs");
                     func.addBasicBlock(rhsBlock);
-                    BasicBlock endBlock = new BasicBlock(LLVM.LLVMAppendBasicBlock(func.getRef(), "or_end"));
+                    BasicBlock endBlock = context.newBasicBlock("or_end");
                     func.addBasicBlock(endBlock);
 
+                    // 处理左操作数
                     Value cond1 = visit(ctx.cond(0));
-                    if (!cond1.getType().equals(context.getInt1Type())) {
-                        throw new RuntimeException("Error: OR operand must be i1 at line " + ctx.getStart().getLine());
+                    if (cond1.getType().equals(context.getInt32Type())) {
+                        ConstantInt zero = context.getInt32Type().getConstant(0, true);
+                        cond1 = builder.buildIntCompare(IntPredicate.NotEqual, cond1, zero, new Some<>("cond_"));
+                    } else if (!cond1.getType().equals(context.getInt1Type())) {
+                        throw new RuntimeException("Error: OR operand must be i1 or i32 at line " + ctx.getStart().getLine());
                     }
                     builder.buildConditionalBranch(cond1, endBlock, rhsBlock);
 
+                    // 处理右操作数
                     builder.positionAfter(rhsBlock);
                     Value cond2 = visit(ctx.cond(1));
-                    if (!cond2.getType().equals(context.getInt1Type())) {
-                        throw new RuntimeException("Error: OR operand must be i1 at line " + ctx.getStart().getLine());
+                    if (cond2.getType().equals(context.getInt32Type())) {
+                        ConstantInt zero = context.getInt32Type().getConstant(0, true);
+                        cond2 = builder.buildIntCompare(IntPredicate.NotEqual, cond2, zero, new Some<>("cond_"));
+                    } else if (!cond2.getType().equals(context.getInt1Type())) {
+                        throw new RuntimeException("Error: OR operand must be i1 or i32 at line " + ctx.getStart().getLine());
                     }
                     builder.buildBranch(endBlock);
 
+                    // 回填
                     builder.positionAfter(endBlock);
                     PhiInstruction phi = builder.buildPhi(context.getInt1Type(), new Some<>("or_result"));
                     phi.addIncoming(
@@ -866,20 +920,68 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
             } else if (ctx.exp() != null) {
                 Value expVal = visit(ctx.exp());
                 if (expVal.getType().getTypeKind() != TypeKind.Integer || !expVal.getType().getAsString().equals("i32")) {
-                    //System.err.println("Debug: Type check failed - expVal type: " + expVal.getType().getClass().getName() +
-                    //        ", kind: " + expVal.getType().getTypeKind() +
-                    //        ", string: " + expVal.getType().getAsString());
                     throw new RuntimeException("Error: Condition expression must be i32 at line " + ctx.getStart().getLine());
                 }
                 ConstantInt zero = context.getInt32Type().getConstant(0, true);
-                Value cmp = builder.buildIntCompare(IntPredicate.NotEqual, expVal, zero, new Some<>("cond"));
-                //System.err.println("Debug: visitCond cmp class: " + cmp.getClass().getName() +
-                //        ", type: " + cmp.getType().getAsString());
-                return cmp;
+                return builder.buildIntCompare(IntPredicate.NotEqual, expVal, zero, new Some<>("cond_"));
             }
             throw new RuntimeException("Error: Unexpected condition structure in runtime mode at line " + ctx.getStart().getLine());
         }
     }
+
+    // 辅助方法：收集链式比较的操作数和谓词
+    private void collectChainedComparisons(SysYParser.CondContext ctx, List<Value> operands, List<IntPredicate> predicates) {
+        if (ctx.LT() != null || ctx.GT() != null || ctx.LE() != null || ctx.GE() != null || ctx.EQ() != null || ctx.NEQ() != null) {
+            SysYParser.CondContext leftCond = ctx.cond(0);
+            SysYParser.CondContext rightCond = ctx.cond(1);
+
+            // 收集左操作数
+            if (leftCond.cond().size() > 0) {
+                collectChainedComparisons(leftCond, operands, predicates);
+            } else if (leftCond.exp() != null) {
+                Value lhs = visit(leftCond.exp());
+                if (lhs.getType().getTypeKind() != TypeKind.Integer || !lhs.getType().getAsString().equals("i32")) {
+                    throw new RuntimeException("Error: Left comparison operand must be i32 at line " + ctx.getStart().getLine());
+                }
+                operands.add(lhs);
+            } else {
+                throw new RuntimeException("Error: Invalid left comparison operand at line " + ctx.getStart().getLine());
+            }
+
+            // 收集右操作数
+            if (rightCond.exp() != null) {
+                Value rhs = visit(rightCond.exp());
+                if (rhs.getType().getTypeKind() != TypeKind.Integer || !rhs.getType().getAsString().equals("i32")) {
+                    throw new RuntimeException("Error: Right comparison operand must be i32 at line " + ctx.getStart().getLine());
+                }
+                operands.add(rhs);
+            } else if (rightCond.cond().size() > 0) {
+                collectChainedComparisons(rightCond, operands, predicates);
+            } else {
+                throw new RuntimeException("Error: Invalid right comparison operand at line " + ctx.getStart().getLine());
+            }
+
+            // 记录谓词
+            IntPredicate pred;
+            if (ctx.LT() != null) {
+                pred = IntPredicate.SignedLessThan;
+            } else if (ctx.GT() != null) {
+                pred = IntPredicate.SignedGreaterThan;
+            } else if (ctx.LE() != null) {
+                pred = IntPredicate.SignedLessEqual;
+            } else if (ctx.GE() != null) {
+                pred = IntPredicate.SignedGreaterEqual;
+            } else if (ctx.EQ() != null) {
+                pred = IntPredicate.Equal;
+            } else if (ctx.NEQ() != null) {
+                pred = IntPredicate.NotEqual;
+            } else {
+                throw new RuntimeException("Error: Unknown comparison operator at line " + ctx.getStart().getLine());
+            }
+            predicates.add(pred);
+        }
+    }
+
 
     @Override
     public Value visitLVal(SysYParser.LValContext ctx) {
@@ -1179,5 +1281,7 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
     public Value visitInitVal(SysYParser.InitValContext ctx) {
         return visit(ctx.exp());
     }
+
+
 
 }

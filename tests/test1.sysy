@@ -1,12 +1,17 @@
-int a = 0;
-int count = 0;
+int counter = 3;
+
+int change() {
+    counter = counter - 1;
+    return counter;
+}
 
 int main() {
-    while (a <= 0) {
-        a = a - 1;
-        count = count + 1;
-        if (a < -20)
-            break;
+    int a = 0;
+    int b = 1;
+    int c = 1;
+
+    if (a && change() > 0 || b && c) {
+        return counter;
     }
-    return count;
+    return 0;
 }
