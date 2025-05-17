@@ -628,7 +628,13 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                 if (args.size() != func.getParameterCount()) {
                     throw new RuntimeException("Error: Argument count mismatch for function '" + funcName + "' at line " + ctx.getStart().getLine());
                 }
-                return builder.buildCall(func, args.toArray(new Value[0]), new Some<>(funcName + "_call"));
+                // 通过 getAsString() 判断返回类型
+                Type funcType = func.getType();
+                String typeString = funcType.getAsString();
+                Option<String> callName = typeString.startsWith("void ") || typeString.equals("void ()") ?
+                        Option.empty() :
+                        new Some<>(funcName + "_call");
+                return builder.buildCall(func, args.toArray(new Value[0]), callName);
             } else if (ctx.unaryOp() != null && ctx.exp().size() == 1) {
                 Value operand = visit(ctx.exp(0));
                 String opText = ctx.unaryOp().getText();
@@ -638,6 +644,10 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
                     ConstantInt zero = context.getInt32Type().getConstant(0, true);
                     return builder.buildIntSub(zero, operand, WrapSemantics.NoSigned, new Some<>("neg"));
                 } else if (opText.equals("!")) {
+                    if (operand.getType().getTypeKind() != TypeKind.Integer || !operand.getType().getAsString().equals("i32")) {
+                        throw new RuntimeException("Error: Unary operator '!' expects i32 operand, got: " +
+                                operand.getType().getAsString() + " at line " + ctx.getStart().getLine());
+                    }
                     ConstantInt zero = context.getInt32Type().getConstant(0, true);
                     Value i1Result = builder.buildIntCompare(IntPredicate.Equal, operand, zero, new Some<>("not"));
                     return builder.buildZeroExt(i1Result, context.getInt32Type(), new Some<>("zext_not"));
