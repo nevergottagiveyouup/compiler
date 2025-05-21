@@ -28,7 +28,7 @@ public class AsmBuilder {
         assemblyOutput.add(String.format("    li %s, %d", dest, value));
     }
 
-    public void loadAddr(String dest, String label) {
+    public void la(String dest, String label) {
         assemblyOutput.add(String.format("    la %s, %s", dest, label));
     }
 

@@ -159,19 +159,31 @@ public class IrTranslater {
         builder.directive("globl", functionName);
         builder.label(functionName);
 
-        // 计算栈帧大小
-        // 首先获取所有溢出变量
-        Set<String> spilledVars = registerAllocator.spilledVars;
+        // 预分配栈空间 - 为所有局部变量分配栈空间
+        Set<String> allLocalVars = new HashSet<>();
 
-        // 为每个溢出变量预先分配栈空间，这样可以提前计算栈帧大小
-        for (String varName : spilledVars) {
+        // 获取所有需要栈空间的变量
+        // 1. 溢出的变量
+        allLocalVars.addAll(registerAllocator.spilledVars);
+
+        // 2. 所有有名字的局部变量
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(function); bb != null; bb = LLVMGetNextBasicBlock(bb)) {
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst != null; inst = LLVMGetNextInstruction(inst)) {
+                String instName = LLVMGetValueName(inst).getString();
+                if (instName != null && !instName.isEmpty() && !isGlobalVariable(instName)) {
+                    allLocalVars.add(instName);
+                }
+            }
+        }
+
+        // 为所有局部变量分配栈空间
+        for (String varName : allLocalVars) {
             allocateStackSpace(varName);
         }
 
-
-        // 为函数参数和局部变量预留额外空间
-        int frameSize = Math.max(nextStackOffset, 4); // 确保至少有4字节（返回地址）
-        currentFrameSize = frameSize; // 保存当前帧大小，以便在函数内统一使用
+        // 计算总帧大小，确保至少有4字节（返回地址）
+        int frameSize = Math.max(nextStackOffset, 4);
+        currentFrameSize = frameSize;
 
         // 函数序言：保存寄存器、分配栈空间
         if (frameSize > 0) {
@@ -278,28 +290,47 @@ public class IrTranslater {
     }
 
     /*********************************************************************************/
-    // 获取变量的位置，如果在栈上就加载到临时寄存器
+    // 获取变量的位置，如果在栈上就加载到临时寄存器，也就是说一定返回一个临时寄存器位置
     private String getVariableLocation(String varName, int instId) {
+        // 检查是否是全局变量
+        if (isGlobalVariable(varName)) {
+            String tempReg = allocateTempRegister(varName);
+            // 加载全局变量地址 - 修正为使用双参数la指令
+            builder.la(tempReg, varName);
+            return tempReg;
+        }
+
+        //局部变量逻辑如下
         Location loc = registerAllocator.getLocation(instId, varName);
+
         if (loc == null) {
             builder.comment("警告: 变量 " + varName + " 在当前位置没有位置信息");
             return "zero"; // 使用零寄存器作为默认值
         }
 
-        if (loc.type== Location.LocationType.REGISTER) {
-            // 变量在固定寄存器中
+        if (loc.type == Location.LocationType.REGISTER) {
             return loc.register;
         } else {
-            // 变量在栈上，需要加载到临时寄存器
             return loadFromStack(varName);
         }
+    }
+
+    // 添加一个方法来判断变量是否是全局变量
+    private boolean isGlobalVariable(String varName) {
+        // 检查模块中是否有这个名称的全局变量
+        LLVMValueRef global = LLVMGetNamedGlobal(moduleRef, varName);
+        return global != null;
     }
 
     // 为溢出变量分配栈空间，该方法仅在变量未被分配位置时起效，否则没有任何操作
     private void allocateStackSpace(String varName) {
         if (!varStackOffsets.containsKey(varName)) {
+            // 分配新的栈空间并记录偏移
             varStackOffsets.put(varName, nextStackOffset);
-            nextStackOffset += 4; // 假设每个变量占用4字节
+            nextStackOffset += 4; // 每个变量占4字节
+
+            // 更新当前帧大小
+            currentFrameSize = nextStackOffset;
         }
     }
 
@@ -326,26 +357,29 @@ public class IrTranslater {
 
     // 分配临时寄存器，一定返回一个临时寄存器位置
     private String allocateTempRegister(String varName) {
-        // 首先查找空闲的寄存器
+        // 首先检查该变量是否已经在寄存器中
+        for (Map.Entry<String, String> entry : tempRegisterUse.entrySet()) {
+            if (varName.equals(entry.getValue())) {
+                return entry.getKey(); // 变量已在寄存器中，直接返回
+            }
+        }
+
+        // 查找空闲的寄存器
         for (String reg : tempRegisters) {
             if (!tempRegisterUse.containsKey(reg)) {
                 tempRegisterUse.put(reg, varName);
+                tempRegisterDirty.put(reg, false); // 初始状态为非脏
                 return reg;
             }
         }
 
         // 没有空闲寄存器，需要溢出一个
         String victimReg = selectVictimRegister();
-        String victimVar = tempRegisterUse.get(victimReg);
-
-        // 如果被修改过，写回栈
-        if (tempRegisterDirty.getOrDefault(victimReg, false)) {
-            int victimOffset = varStackOffsets.get(victimVar);
-            builder.store(victimReg, "sp", victimOffset);
-        }
 
         // 重新分配寄存器
         tempRegisterUse.put(victimReg, varName);
+        tempRegisterDirty.put(victimReg, false); // 重置脏状态
+
         return victimReg;
     }
 
@@ -376,6 +410,25 @@ public class IrTranslater {
             victimReg = tempRegisters.get(0);
         }
 
+        // 处理被牺牲的寄存器中的变量
+        String victimVar = tempRegisterUse.get(victimReg);
+        if (victimVar != null) {
+            if (tempRegisterDirty.getOrDefault(victimReg, false)) {
+                if (isGlobalVariable(victimVar)) {
+                    // 全局变量，需要写回全局变量区
+                    String addrReg = allocateTempRegister("addr_" + victimVar);
+                    builder.la(addrReg, victimVar);
+                    builder.store(victimReg, addrReg, 0);
+                } else if (varStackOffsets.containsKey(victimVar)) {
+                    // 栈上变量，写回栈
+                    int victimOffset = varStackOffsets.get(victimVar);
+                    builder.store(victimReg, "sp", victimOffset);
+                }
+                // 重置脏标记
+                tempRegisterDirty.put(victimReg, false);
+            }
+        }
+
         return victimReg;
     }
 
@@ -386,16 +439,31 @@ public class IrTranslater {
         }
     }
 
-    // 函数结束前将所有脏寄存器写回栈
+    // 函数结束前将所有脏寄存器写回
     private void flushDirtyRegisters() {
-        for (String reg : tempRegisterUse.keySet()) {
+        for (String reg : new ArrayList<>(tempRegisterUse.keySet())) {
             if (tempRegisterDirty.getOrDefault(reg, false)) {
                 String var = tempRegisterUse.get(reg);
-                int offset = varStackOffsets.get(var);
-                builder.store(reg, "sp", offset);
+
+                // 区分全局变量和局部变量
+                if (isGlobalVariable(var)) {
+                    // 全局变量，需要写回全局变量区
+                    String addrReg = allocateTempRegister("addr_" + var);
+                    builder.la(addrReg, var);
+                    builder.store(reg, addrReg, 0);
+                } else if (varStackOffsets.containsKey(var)) {
+                    // 局部变量，写回栈
+                    int offset = varStackOffsets.get(var);
+                    builder.store(reg, "sp", offset);
+                }
+
+                // 重置脏标记
+                tempRegisterDirty.put(reg, false);
             }
         }
     }
+
+
     /**********************************************************************************/
 
 
@@ -515,61 +583,83 @@ public class IrTranslater {
 
         builder.comment("加载 " + destVar + " 从 " + pointerName);
 
-        // 获取指针位置
-        String pointerReg = getVariableLocation(pointerName, instructionId);
-
-        // 获取目标变量的位置
+        // 获取目标寄存器
+        String destReg;
         Location destLoc = registerAllocator.getLocation(instructionId, destVar);
 
-        if (destLoc == null || destLoc.type == Location.LocationType.STACK) {
-            // 目标在栈上或未分配，使用临时寄存器
-            allocateStackSpace(destVar);
+        if (destLoc == null) {
+            // destLoc为null，说明是全局变量
             String tempReg = allocateTempRegister(destVar);
-
-            // 执行加载 - 使用正确的load方法
-            builder.load(tempReg, pointerReg, 0);
-
-            // 标记寄存器为脏
-            markRegisterDirty(tempReg);
+            destReg = tempReg;
+            // 全局变量不需要管理栈空间
+        } else if (destLoc.type == Location.LocationType.STACK) {
+            // 目标在栈上，需要临时寄存器
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
         } else {
-            // 目标在固定寄存器中
-            String destReg = destLoc.register;
-            builder.load(destReg, pointerReg, 0);
+            // 目标在寄存器中
+            destReg = destLoc.register;
+        }
+
+        // 处理指针，它可能指向全局变量或局部变量
+        if (isGlobalVariable(pointerName)) {
+            // 指针指向全局变量，需要两步：加载地址，然后加载值
+            String addrReg = allocateTempRegister("addr_" + pointerName);
+            builder.la(addrReg, pointerName);   // 加载全局变量地址到临时寄存器
+            builder.load(destReg, addrReg, 0);  // 从地址加载值到目标寄存器
+        } else {
+            // 指针是局部变量，获取指针的寄存器位置
+            String pointerReg = getVariableLocation(pointerName, instructionId);
+            builder.load(destReg, pointerReg, 0); // 通过指针加载值到目标寄存器
         }
     }
 
     private void translateStore(LLVMValueRef inst) {
-        LLVMValueRef valueRef = LLVMGetOperand(inst, 0);
-        LLVMValueRef pointerRef = LLVMGetOperand(inst, 1);
-
+        LLVMValueRef valueRef = LLVMGetOperand(inst, 0);  // 要存储的值
+        LLVMValueRef pointerRef = LLVMGetOperand(inst, 1); // 指向存储位置的指针
         String pointerName = LLVMGetValueName(pointerRef).getString();
-        builder.comment("存储到 " + pointerName);
 
-        // 获取指针位置
-        String pointerReg = getVariableLocation(pointerName, instructionId);
+        builder.comment("存储到 " + pointerName);
 
         // 获取源值
         String valueReg;
         if (LLVMIsAConstant(valueRef) != null) {
             // 值是常量
             long constValue = LLVMConstIntGetSExtValue(valueRef);
-            if (constValue >= -2048 && constValue <= 2047) {
-                // 小常量可以用临时寄存器加载
-                valueReg = allocateTempRegister("const_temp");
-                builder.loadImm(valueReg, constValue);
-            } else {
-                // 大常量需要多条指令加载
-                valueReg = allocateTempRegister("const_temp");
-                builder.loadImm(valueReg,constValue);
-            }
+            valueReg = allocateTempRegister("const_temp");
+            builder.loadImm(valueReg, constValue);
         } else {
             // 值是变量
             String valueName = LLVMGetValueName(valueRef).getString();
             valueReg = getVariableLocation(valueName, instructionId);
         }
 
-        // 执行存储
-        builder.store(valueReg, pointerReg, 0);
+        // 处理指针，它可能指向全局变量或局部变量
+        if (isGlobalVariable(pointerName)) {
+            // 指针指向全局变量，需要两步：加载地址，然后存储值
+            String addrReg = allocateTempRegister("addr_" + pointerName);
+            builder.la(addrReg, pointerName);   // 加载全局变量地址到临时寄存器
+            builder.store(valueReg, addrReg, 0); // 将值存储到地址
+        } else {
+            // 指针是局部变量，获取指针的寄存器位置
+            Location pointerLoc = registerAllocator.getLocation(instructionId, pointerName);
+
+            if (pointerLoc == null) {
+                // 这种情况不应该发生，因为局部变量应该有位置分配
+                builder.comment("警告：指针 " + pointerName + " 没有位置信息");
+                return;
+            }
+
+            if (pointerLoc.type == Location.LocationType.REGISTER) {
+                // 指针在寄存器中
+                String pointerReg = pointerLoc.register;
+                builder.store(valueReg, pointerReg, 0); // 通过指针存储值
+            } else {
+                // 指针在栈上，需要先加载到寄存器
+                String pointerReg = loadFromStack(pointerName);
+                builder.store(valueReg, pointerReg, 0); // 通过指针存储值
+            }
+        }
     }
 
     private void translateBr(LLVMValueRef inst) {

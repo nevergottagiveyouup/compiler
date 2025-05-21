@@ -37,6 +37,7 @@ public class Main {
         IrTranslater translater = new IrTranslater(irVisitor);
         AsmBuilder asmBuilder = translater.getBuilder();
         asmBuilder.writeToFile("riscv.txt");
+        System.out.println("RISC-V 汇编代码已写入: " );
 
         // 输出 LLVM IR 到文件
         try {
