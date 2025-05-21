@@ -67,6 +67,10 @@ public class MyVisitor extends SysYParserBaseVisitor<Value> {
         return Option.of(termRef).map(Instruction::new);
     }
 
+    public Module getModule() {
+        return module;
+    }
+
     public void writeToFile(String filePath) {
         Result<Unit, AssertionError> result = module.dump(Option.of(new File(filePath)));
         if (result.isErr()) {

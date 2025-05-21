@@ -33,6 +33,11 @@ public class Main {
         MyVisitor visitor = new MyVisitor();
         visitor.visit(tree);
 
+        IrVisitor irVisitor = new IrVisitor(visitor.getModule());
+        IrTranslater translater = new IrTranslater(irVisitor);
+        AsmBuilder asmBuilder = translater.getBuilder();
+        asmBuilder.writeToFile("riscv.txt");
+
         // 输出 LLVM IR 到文件
         try {
             visitor.writeToFile(outputFile); // 使用命令行指定的输出路径
