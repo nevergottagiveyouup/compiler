@@ -11,7 +11,7 @@ java -cp ".:../lib/*" Main ../tests/test1.sysy   运行
 llvm-as out.ll 检查llvm ir有没有错误
 
 
-java -cp ".:../lib/*" Main ../tests/test1.sysy out.ll
+java -cp ".:../lib/*" Main ../tests/test1.sysy riscv.txt
 
 
 git rm --cached lib/javacpp-1.5.7-linux-x86_64.jar lib/javacpp-1.5.7.jar lib/kotlin-stdlib-1.9.0.jar lib/llvm-13.0.1-1.5.7-linux-x86_64.jar lib/llvm-13.0.1-1.5.7.jar lib/llvm-platform-13.0.1-1.5.7.jar lib/llvm4j-0.1.2-SNAPSHOT.jar

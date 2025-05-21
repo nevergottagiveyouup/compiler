@@ -36,10 +36,10 @@ public class Main {
         IrVisitor irVisitor = new IrVisitor(visitor.getModule());
         IrTranslater translater = new IrTranslater(irVisitor);
         AsmBuilder asmBuilder = translater.getBuilder();
-        asmBuilder.writeToFile("riscv.txt");
+        asmBuilder.writeToFile(outputFile);
         System.out.println("RISC-V 汇编代码已写入: " );
 
-        // 输出 LLVM IR 到文件
+        /* 输出 LLVM IR 到文件
         try {
             visitor.writeToFile(outputFile); // 使用命令行指定的输出路径
             System.out.println("LLVM IR successfully written to " + outputFile);
@@ -48,7 +48,7 @@ public class Main {
             System.exit(1);
         } finally {
             visitor.close(); // 确保释放资源
-        }
+        }*/
     }
 
 }
