@@ -610,10 +610,12 @@ public class IrTranslater {
         } else  {
             // 结果在非临时寄存器中，什么也不做
         }
+
         lockRegister(destReg);
 
         // 生成计算指令
         builder.op3(operation, destReg, op1Reg, op2Reg);
+        markRegisterDirty(destReg);
         unlockRegister(op1Reg);
         unlockRegister(op2Reg);
 
@@ -676,6 +678,7 @@ public class IrTranslater {
 
         // 执行加载操作
         builder.load(destReg, ptrReg, 0);
+        markRegisterDirty(destReg);
 
         // 解锁指针寄存器
         unlockRegister(ptrReg);
@@ -768,6 +771,7 @@ public class IrTranslater {
                 unlockRegister(addrReg);
             }
         }
+        markRegisterDirty(ptrReg);
         lockRegister(ptrReg);
 
         // 执行存储操作
@@ -866,6 +870,7 @@ public class IrTranslater {
                     unlockRegister(addrReg);
                 }
             }
+            markRegisterDirty(condReg);
             lockRegister(condReg);
 
             for (String reg : tempRegisters) {
@@ -927,6 +932,7 @@ public class IrTranslater {
                 unlockRegister(addrReg);
             }
         }
+        markRegisterDirty(op1Reg);
         lockRegister(op1Reg);
 
         // 处理第二个操作数
@@ -962,6 +968,7 @@ public class IrTranslater {
                 unlockRegister(addrReg);
             }
         }
+        markRegisterDirty(op2Reg);
         lockRegister(op2Reg);
 
         // 获取结果寄存器
@@ -1014,6 +1021,8 @@ public class IrTranslater {
             builder.la(addrReg, destVar);
             builder.store(destReg, addrReg, 0);
             tempRegisterDirty.put(destReg, false);
+            markRegisterDirty(addrReg);
+            markRegisterDirty(destReg);
         }
 
         unlockRegister(destReg);
@@ -1054,6 +1063,7 @@ public class IrTranslater {
             destReg = allocateTempRegister(varName);
             markRegisterDirty(destReg);
         }
+
         lockRegister(destReg);
 
         // 计算栈上地址并存入目标寄存器
@@ -1069,6 +1079,7 @@ public class IrTranslater {
         }
 
         unlockRegister(destReg);
+        markRegisterDirty(destReg);
     }
 
     private void translateGetElementPtr(LLVMValueRef inst) {
@@ -1109,6 +1120,7 @@ public class IrTranslater {
                 unlockRegister(addrReg);
             }
         }
+        markRegisterDirty(baseReg);
         lockRegister(baseReg);
 
         // 获取目标寄存器
@@ -1120,6 +1132,7 @@ public class IrTranslater {
             destReg = allocateTempRegister(destVar);
             markRegisterDirty(destReg);
         }
+
         lockRegister(destReg);
 
         // 处理索引和偏移计算
@@ -1186,6 +1199,8 @@ public class IrTranslater {
             builder.la(addrReg, destVar);
             builder.store(destReg, addrReg, 0);
             tempRegisterDirty.put(destReg, false);
+            markRegisterDirty(addrReg);
+            markRegisterDirty(destReg);
         }
 
         unlockRegister(destReg);
@@ -1222,6 +1237,7 @@ public class IrTranslater {
                 unlockRegister(addrReg);
             }
         }
+        markRegisterDirty(condReg);
         lockRegister(condReg);
 
         // 获取默认分支
@@ -1385,6 +1401,7 @@ public class IrTranslater {
 
         // 生成位运算指令
         builder.op3(operation, destReg, op1Reg, op2Reg);
+        markRegisterDirty(destReg);
 
         // 解锁操作数寄存器
         unlockRegister(op1Reg);
@@ -1493,6 +1510,7 @@ public class IrTranslater {
             builder.la(addrReg, destVar);
             builder.store(destReg, addrReg, 0);
             tempRegisterDirty.put(destReg, false);
+            markRegisterDirty(addrReg);
         }
 
         unlockRegister(destReg);
@@ -1559,6 +1577,7 @@ public class IrTranslater {
             builder.la(addrReg, destVar);
             builder.store(destReg, addrReg, 0);
             tempRegisterDirty.put(destReg, false);
+            markRegisterDirty(addrReg);
         }
 
         unlockRegister(destReg);
@@ -1576,6 +1595,7 @@ public class IrTranslater {
             destReg = allocateTempRegister(destVar);
             markRegisterDirty(destReg);
         }
+        markRegisterDirty(destReg);
         lockRegister(destReg);
 
         // 获取 PHI 指令的操作数
@@ -1596,6 +1616,8 @@ public class IrTranslater {
             builder.la(addrReg, destVar);
             builder.store(destReg, addrReg, 0);
             tempRegisterDirty.put(destReg, false);
+            markRegisterDirty(addrReg);
+            markRegisterDirty(destReg);
         }
         unlockRegister(destReg);
     }
