@@ -176,7 +176,8 @@ public class IrTranslater {
         for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(function); bb != null; bb = LLVMGetNextBasicBlock(bb)) {
             translateBasicBlock(bb);
         }
-
+        
+        /*
         // 函数尾声：确保所有路径都有返回指令
         // 注意：这是一个安全措施，理论上每个基本块都应该有自己的终止指令
         builder.emptyLine();
@@ -186,6 +187,8 @@ public class IrTranslater {
             builder.op2("addi", "sp", "sp", String.valueOf(frameSize));
         }
         builder.ret();
+
+         */
     }
 
     private void translateBasicBlock(LLVMBasicBlockRef block) {
