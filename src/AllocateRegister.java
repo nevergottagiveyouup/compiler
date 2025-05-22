@@ -33,12 +33,12 @@ class AllocateToStack implements AllocateRegister {
 // 线性扫描
 class LinearScan implements AllocateRegister {
     private Map<String, LiveInterval> liveIntervals;  // 生命周期信息
-    private int maxRegisters = 22;  // 默认可用寄存器数
+    private int maxRegisters = 18;  // 默认可用寄存器数
 
     //寄存器状态
     private List<String> availableRegisters = new ArrayList<>();
     private static final String[] REGISTER_NAMES = {// 临时寄存器
-            "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8","a9","a10","a11",  // 参数寄存器(除去a0)
+            "a1", "a2", "a3", "a4", "a5", "a6", "a7",  // 参数寄存器(除去a0)
             "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11" // 保存寄存器
     };
 

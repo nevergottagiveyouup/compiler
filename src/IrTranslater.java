@@ -63,9 +63,7 @@ public class IrTranslater {
     }
 
     public void translateModule() {
-        // 添加汇编头部
         builder.section("text");
-
         builder.emptyLine();
         builder.comment("全局变量定义");
         builder.section("data");
@@ -75,7 +73,7 @@ public class IrTranslater {
             translateGlobalVariable(value);
         }
 
-        // 返回代码段
+        builder.emptyLine();
         builder.section("text");
 
         // 遍历函数
@@ -85,40 +83,30 @@ public class IrTranslater {
     }
 
     private void translateGlobalVariable(LLVMValueRef global) {
-        //获取全局变量名称
         String name = LLVMGetValueName(global).getString();
-        if (name == null || name.isEmpty()) return;
+        // 验证名称合法性
+        if (name == null || name.isEmpty() || !name.matches("^[a-zA-Z_][a-zA-Z0-9_]*$")) {
+            builder.comment("跳过无效全局变量名: " + (name == null ? "null" : name));
+            return;
+        }
 
-        // 获取初始值（如果有）
         LLVMValueRef initializer = LLVMGetInitializer(global);
 
-        //生成全局变量声明
-        builder.directive("globl", name);
         builder.label(name);
 
         if (initializer != null) {
             if (LLVMIsAConstantInt(initializer) != null) {
-                // 整数常量
                 long value = LLVMConstIntGetSExtValue(initializer);
                 builder.directive("word", String.valueOf(value));
             } else {
-                // 其他类型（默认为0）
                 builder.directive("word", "0");
             }
         } else {
-            // 无初始化值，分配空间
             LLVMTypeRef type = LLVMGetElementType(LLVMTypeOf(global));
-
-            // 获取模块的数据布局
             String dataLayoutStr = String.valueOf(LLVMGetDataLayout(moduleRef));
             LLVMTargetDataRef dataLayout = LLVMCreateTargetData(dataLayoutStr);
-
-            // 计算类型大小
             long size = LLVMSizeOfTypeInBits(dataLayout, type) / 8;
-
-            // 释放数据布局
             LLVMDisposeTargetData(dataLayout);
-
             builder.directive("space", String.valueOf(Math.max((int)size, 4)));
         }
     }
