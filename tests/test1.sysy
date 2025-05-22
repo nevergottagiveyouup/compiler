@@ -1,16 +1,30 @@
-int x = 56;
-int y = 98;
-
 int main() {
-    int a = x;
-    int b = y;
-    while (b != 0) {
-        if (a > b) {
-            a = a - b;
+    int a=1, b=2, c=3, d=4, e=5;
+    int f=6, g=7, h=8, i=9, j=10;
+    int k=11, l=12, m=13, n=14, o=15;
+    int p=16, q=17, r=18, s=19, t=20;
+    int u=21, v=22, w=23, x=24, y=25;
+    int z=26, tmp, count=0;
+
+    while (count < 8) {
+        tmp = ((a * b) + (c % d)) - (e / f);
+        if (tmp > 50) {
+            tmp = tmp * (g + h) / i;
+            if (tmp < 100) {
+                j = j + (k * l) % m;
+            } else {
+                n = n - (o * p) / q;
+                if (n < 0) break;
+            }
         } else {
-            b = b - a;
+            r = r + (s - t) * u;
+            if (r > 200) continue;
         }
+
+        v = (w * x) % y + z;
+        z = (v / 2) * (count % 3);
+        count = count + 1;
     }
-    int result = a;
-	return result;
+
+    return tmp + z;
 }
