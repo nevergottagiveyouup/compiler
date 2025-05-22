@@ -4,6 +4,8 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.List;
 
+
+
 public class AsmBuilder {
     private List<String> assemblyOutput = new ArrayList<>();
 
@@ -106,5 +108,9 @@ public class AsmBuilder {
     // 在 AsmBuilder 类中添加此方法
     public void move(String dest, String src) {
         assemblyOutput.add(String.format("    mv %s, %s", dest, src));
+    }
+
+    public void ecall() {
+        assemblyOutput.add("ecall");
     }
 }

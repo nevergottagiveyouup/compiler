@@ -125,20 +125,15 @@ public class IrTranslater {
 
     private void translateFunction(LLVMValueRef function) {
         String functionName = LLVMGetValueName(function).getString();
+        boolean isMainFunction = functionName.equals("main"); // 标识是否为 main 函数
 
         if (LLVMCountBasicBlocks(function) == 0) return;
 
         // 重置栈分配状态
-        nextStackOffset = 4; // 重置栈偏移计数器（0位置用于返回地址）
-        varStackOffsets.clear(); // 清空变量栈偏移表
-        tempRegisterUse.clear(); // 清空临时寄存器使用情况
-        tempRegisterDirty.clear(); // 清空临时寄存器脏状态
-
-        // 函数开始
-        builder.emptyLine();
-        builder.comment("函数: " + functionName);
-        builder.directive("globl", functionName);
-        builder.label(functionName);
+        nextStackOffset = isMainFunction ? 0 : 4; // main 不需要预留 ra 空间
+        varStackOffsets.clear();
+        tempRegisterUse.clear();
+        tempRegisterDirty.clear();
 
         // 预扫描所有基本块，收集 alloca 和溢出变量
         for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(function); bb != null; bb = LLVMGetNextBasicBlock(bb)) {
@@ -155,40 +150,37 @@ public class IrTranslater {
 
         // 为溢出变量预留栈空间
         for (String varName : registerAllocator.spilledVars) {
-            // 为溢出变量分配栈偏移
-            varStackOffsets.put(varName, nextStackOffset);
-            nextStackOffset += 4; // 每个变量占4字节
+            if (!varStackOffsets.containsKey(varName)) {
+                varStackOffsets.put(varName, nextStackOffset);
+                nextStackOffset += 4;
+            }
         }
 
-        // 计算总帧大小，确保至少有4字节（返回地址）
+        // 计算总帧大小
         int frameSize = nextStackOffset;
         currentFrameSize = frameSize;
 
-        // 函数序言：保存寄存器、分配栈空间
-        if (frameSize > 0) {
-            // 只有当需要栈空间时才生成序言
+        // 函数序言
+        builder.emptyLine();
+        builder.comment("函数: " + functionName);
+        builder.directive("globl", functionName);
+        builder.label(functionName);
+
+        if (frameSize > 0 && !isMainFunction) {
+            // 仅为非 main 函数保存 ra 和分配栈空间
             builder.op2("addi", "sp", "sp", "-" + frameSize);
-            builder.store("ra", "sp", 0);  // 保存返回地址
-            // 不需要设置帧指针，直接用sp+偏移访问局部变量
+            builder.store("ra", "sp", 0);
+        } else if (frameSize > 0) {
+            // 为 main 函数仅分配局部变量空间
+            builder.op2("addi", "sp", "sp", "-" + frameSize);
         }
 
-        // 遍历函数的基本块
+        // 遍历基本块
         for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(function); bb != null; bb = LLVMGetNextBasicBlock(bb)) {
             translateBasicBlock(bb);
         }
-        
-        /*
-        // 函数尾声：确保所有路径都有返回指令
-        // 注意：这是一个安全措施，理论上每个基本块都应该有自己的终止指令
-        builder.emptyLine();
-        builder.label(functionName + "_end");
-        if (frameSize > 0) {
-            builder.load("ra", "sp", 0);
-            builder.op2("addi", "sp", "sp", String.valueOf(frameSize));
-        }
-        builder.ret();
 
-         */
+        // 移除原有的尾声生成代码（已注释）
     }
 
     private void translateBasicBlock(LLVMBasicBlockRef block) {
@@ -459,6 +451,11 @@ public class IrTranslater {
     private void translateRet(LLVMValueRef inst) {
         builder.comment("返回指令");
 
+        // 获取当前函数名
+        LLVMValueRef function = LLVMGetBasicBlockParent(LLVMGetInstructionParent(inst));
+        String functionName = LLVMGetValueName(function).getString();
+        boolean isMainFunction = functionName.equals("main");
+
         // 检查是否有返回值
         int operandCount = LLVMGetNumOperands(inst);
         if (operandCount > 0) {
@@ -471,44 +468,52 @@ public class IrTranslater {
             } else {
                 String retVarName = LLVMGetValueName(retValue).getString();
                 String retReg = lookupRegisterAllocation(retVarName, instructionId);
-                if(retReg == "spill") {
-                    // 如果返回值被溢出
-                    // 检查变量是否已在临时寄存器中
+                if (retReg.equals("spill")) {
                     boolean isInTempReg = false;
                     for (String reg : tempRegisters) {
                         if (tempRegisterUse.containsKey(reg) &&
                                 tempRegisterUse.get(reg).equals(retVarName)) {
                             builder.move("a0", reg);
-                            // 避免后续重复处理
                             isInTempReg = true;
                             break;
                         }
                     }
-                    if(isInTempReg==false){
+                    if (!isInTempReg) {
                         int offset = varStackOffsets.get(retVarName);
                         builder.load("a0", "sp", offset);
                     }
-                }else if(retReg == "global"){
-                    // 如果返回值是全局变量，需要加载到寄存器
+                } else if (retReg.equals("global")) {
                     String addrReg = allocateTempRegister("addr_" + retVarName);
-                    builder.la(addrReg, retVarName);   // 加载全局变量地址到临时寄存器
-                    builder.load("a0", addrReg, 0);  // 从地址加载值到目标寄存器
-                }else{
-                    //返回值在寄存器上
-                    builder.move("a0",retReg);
+                    builder.la(addrReg, retVarName);
+                    builder.load("a0", addrReg, 0);
+                    unlockRegister(addrReg);
+                } else {
+                    builder.move("a0", retReg);
                 }
-
-
             }
+        } else {
+            // 无返回值，默认为 0
+            builder.loadImm("a0", 0);
         }
 
-        // 使用函数开始时计算的帧大小
-        if (currentFrameSize > 0) {
-            builder.load("ra", "sp", 0);  // 恢复返回地址
-            builder.op2("addi", "sp", "sp", String.valueOf(currentFrameSize));  // 恢复栈指针
-        }
+        // 确保脏寄存器写回栈
+        flushDirtyRegisters();
 
-        builder.ret();
+        if (isMainFunction) {
+            // 为 main 函数生成 exit 系统调用
+            if (currentFrameSize > 0) {
+                builder.op2("addi", "sp", "sp", String.valueOf(currentFrameSize)); // 恢复栈指针
+            }
+            builder.loadImm("a7", 93); // exit 系统调用号
+            builder.ecall();
+        } else {
+            // 为其他函数生成普通返回
+            if (currentFrameSize > 0) {
+                builder.load("ra", "sp", 0); // 恢复返回地址
+                builder.op2("addi", "sp", "sp", String.valueOf(currentFrameSize)); // 恢复栈指针
+            }
+            builder.ret();
+        }
     }
 
     private void translateBinaryOp(LLVMValueRef inst, int opcode) {
