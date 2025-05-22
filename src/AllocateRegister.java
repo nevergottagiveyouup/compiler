@@ -51,6 +51,9 @@ class LinearScan implements AllocateRegister {
     // 溢出变量集合（仅记录哪些变量需要溢出）
     public Set<String> spilledVars = new HashSet<>();
 
+    // 溢出变量的寄存器信息,如果寄存器为null，说明变量没有被分配到寄存器上过，让翻译器直接分配栈
+    private Map<Integer,Map<String,String>> varFirstSpillByInst = new HashMap<>();
+
     public LinearScan(Map<String, LiveInterval> liveIntervals) {
         this.liveIntervals = liveIntervals;
     }
@@ -62,7 +65,7 @@ class LinearScan implements AllocateRegister {
         }
 
         // 初始化可用寄存器列表
-        availableRegisters = Arrays.asList(REGISTER_NAMES).subList(0, maxRegisters);
+        availableRegisters = new ArrayList<>(Arrays.asList(REGISTER_NAMES).subList(0, maxRegisters));
 
         // 按开始位置排序所有区间
         List<LiveInterval> sortedIntervals = new ArrayList<>(liveIntervals.values());
@@ -81,6 +84,12 @@ class LinearScan implements AllocateRegister {
 
         for (int i = 0; i <= maxInstIndex; i++) {
             registerAllocationByInst.put(i, new HashMap<>());
+        }
+
+        //初始化每个指令点应该溢出的变量映射表
+        varFirstSpillByInst.clear();
+        for (int i = 0; i <= maxInstIndex; i++) {
+            varFirstSpillByInst.put(i, new HashMap<>());
         }
 
         // 活跃列表(按结束位置排序)
@@ -122,7 +131,7 @@ class LinearScan implements AllocateRegister {
             location = new Location(registerAllocation.get(varName));
         } else if (spilledVars.contains(varName)) {
             // 变量标记为溢出，创建栈类型的位置标记
-            location = new Location(-1); // 使用-1表示栈位置，具体偏移由翻译器决定
+            location = new Location(); // 表示溢出
         } else {
             // 不应该出现这种情况
             throw new RuntimeException("变量未分配位置: " + varName);
@@ -137,7 +146,15 @@ class LinearScan implements AllocateRegister {
         }
     }
 
-    // 清理不再活跃的变量并回收寄存器
+    private void recordFirstSpillInfo(LiveInterval interval,String spillreg) {
+        String varName = interval.varName;
+
+        //要记录变量被溢出时所在的寄存器
+        Map<String, String> instMap = varFirstSpillByInst.get(interval.start);
+        instMap.put(varName, spillreg);
+    }
+
+    // 清理不再活跃的变量并回收寄存器,不再活跃的变量不需要溢出，直接杀死
     private void expireOldIntervals(LiveInterval interval, List<LiveInterval> active, List<String> free) {
         // 确保按结束点排序
         Collections.sort(active, Comparator.comparingInt(i -> i.end));
@@ -162,7 +179,6 @@ class LinearScan implements AllocateRegister {
         Collections.sort(free);
     }
 
-
     // 处理溢出情况
     private void spillAtInterval(LiveInterval interval, List<LiveInterval> active) {
         // 找出结束最晚的区间
@@ -174,11 +190,11 @@ class LinearScan implements AllocateRegister {
             registerAllocation.put(interval.varName, reg);
             registerAllocation.remove(last.varName);
 
-            // 仅标记变量为溢出,如果在翻译器中，这个变量再次被用到，查找时仅知道其已经被溢出了————
-            //————然后就可以在翻译器中获得栈状态，安排它在栈和临时寄存器之间的移动
             spilledVars.add(last.varName);
             // 更新被溢出变量的位置信息
             updateLocationForInterval(last);
+            //更新溢出信息
+            recordFirstSpillInfo(last,reg);
 
             // 更新活跃列表
             active.remove(last);
@@ -188,6 +204,8 @@ class LinearScan implements AllocateRegister {
         } else {
             // 当前区间结束较晚，直接溢出到栈
             spilledVars.add(interval.varName);
+            updateLocationForInterval(interval); // 补充
+            recordFirstSpillInfo(interval,null);
         }
     }
 
@@ -196,6 +214,10 @@ class LinearScan implements AllocateRegister {
         Map<String, Location> instMap = registerAllocationByInst.get(instructionIndex);
         if (instMap == null) return null;
         return instMap.get(varName);
+    }
+
+    public  Map<String, String> getFirstSpillInfo(int instructionIndex) {
+        return varFirstSpillByInst.get(instructionIndex);
     }
 
 }

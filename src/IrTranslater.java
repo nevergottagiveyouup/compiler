@@ -14,11 +14,11 @@ public class IrTranslater {
     private final LLVMModuleRef moduleRef;
 
     // 活跃区间表
-    private Map<String, LiveInterval> liveIntervals;
+    private final Map<String, LiveInterval> liveIntervals;
     // 标签表：块名 -> 指令编号
-    private Map<String, Integer> labelTable;
+    private final Map<String, Integer> labelTable;
     // 全局符号表
-    private Map<String, GlobalVariableInfo> globalSymbols ;
+    private final Map<String, GlobalVariableInfo> globalSymbols ;
 
 
     private LinearScan registerAllocator;
@@ -30,6 +30,7 @@ public class IrTranslater {
     private List<String> constRegisters = Arrays.asList("t5","t6");
     private Map<String, String> tempRegisterUse = new HashMap<>(); // 记录临时寄存器当前保存的变量
     private Map<String, Boolean> tempRegisterDirty = new HashMap<>(); // 记录临时寄存器是否被修改过
+    private Map<String,Boolean> tempRegisterLock = new HashMap<>(); // 记录临时寄存器是否被锁定
 
     // 栈偏移管理
     private int currentFrameSize = 0;
@@ -139,6 +140,19 @@ public class IrTranslater {
         builder.directive("globl", functionName);
         builder.label(functionName);
 
+        // 预扫描所有基本块，收集 alloca 和溢出变量
+        for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(function); bb != null; bb = LLVMGetNextBasicBlock(bb)) {
+            for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst != null; inst = LLVMGetNextInstruction(inst)) {
+                if (LLVMGetInstructionOpcode(inst) == LLVMAlloca) {
+                    String varName = LLVMGetValueName(inst).getString();
+                    if (!varStackOffsets.containsKey(varName)) {
+                        varStackOffsets.put(varName, nextStackOffset);
+                        nextStackOffset += 4;
+                    }
+                }
+            }
+        }
+
         // 为溢出变量预留栈空间
         for (String varName : registerAllocator.spilledVars) {
             // 为溢出变量分配栈偏移
@@ -191,6 +205,22 @@ public class IrTranslater {
         int opcode = LLVMGetInstructionOpcode(inst);
         String instName = LLVMGetValueName(inst).getString();
 
+        Map<String, String> spillInfo = lookupSpillInfo(instructionId);
+        if (spillInfo != null) {
+            // 负责溢出变量的回栈
+            for (Map.Entry<String, String> entry : spillInfo.entrySet()) {
+                String varName = entry.getKey();
+                String regName = entry.getValue();
+                if(regName != null){
+                    builder.comment("变量 " + varName + " 溢出到栈 " );
+                    int offset= varStackOffsets.get(varName);
+                    builder.store(regName,"sp",offset);
+                }else{//说明这个溢出的变量是新定义的
+
+                }
+            }
+        }
+
         switch (opcode) {
             case LLVMRet:  // 返回指令
                 translateRet(inst);
@@ -201,9 +231,9 @@ public class IrTranslater {
             case LLVMSwitch: // Switch指令
                 translateSwitch(inst);
                 break;
-            case LLVMCall:  // 函数调用
-                //translateCall(inst);
-                break;
+            /*case LLVMCall:  // 函数调用
+                translateCall(inst);
+                break;*/
             case LLVMAdd:   // 加法
             case LLVMSub:   // 减法
             case LLVMMul:   // 乘法
@@ -255,268 +285,227 @@ public class IrTranslater {
     }
 
     /*********************************************************************************/
-    // 内部方法的外部接口：获取变量的位置，如果在栈上/全局变量就加载到临时寄存器，也就是说一定返回一个寄存器位置
-    private String getVariableRegister(String varName, int instId) {
-        // 检查是否是全局变量，如果是全局变量就为它分配一个临时寄存器
+
+    /**
+     * 这是一个查询方法，如果变量仍然被安排在寄存器里，就会返回安排的位置，否则会告诉你它在栈上或者是全局变量
+     * @return 存放变量的寄存器名称/global/stack/zero
+     */
+    private String lookupRegisterAllocation(String varName, int instId) {
+        // 处理全局变量，直接返回变量名，由其他方法处理
         if (isGlobalVariable(varName)) {
-            String tempReg = allocateTempRegister(varName);
-            // 加载全局变量地址 - 修正为使用双参数la指令
-            builder.la(tempReg, varName);
-            return tempReg;
+            return "global";
         }
 
-        //局部变量：
+        // 查询寄存器分配器获取位置
         Location loc = registerAllocator.getLocation(instId, varName);
 
-        if (loc == null) {
-            builder.comment("警告: 变量 " + varName + " 在当前位置没有位置信息");
-            return "zero"; // 使用零寄存器作为默认值
-        }
-
-        if (loc.type == Location.LocationType.REGISTER) {
+        // 变量在寄存器中，就返回对应的寄存器位置
+        if (loc != null && loc.type == Location.LocationType.REGISTER) {
             return loc.register;
-        } else {
-            return loadFromStack(varName);
         }
+
+        // 变量溢出到栈上
+        if (loc != null && loc.type == Location.LocationType.STACK) {
+            return "spill";
+        }
+
+        // 没有位置信息
+        builder.comment("警告: 变量 " + varName + " 没有位置信息");
+        return "zero";
     }
 
-    // 添加一个方法来判断变量是否是全局变量
     private boolean isGlobalVariable(String varName) {
-        // 检查模块中是否有这个名称的全局变量
-        LLVMValueRef global = LLVMGetNamedGlobal(moduleRef, varName);
-        return global != null;
+        // 检查变量是否在全局符号表中
+        return globalSymbols.containsKey(varName);
     }
 
-    // 内部方法：为溢出变量分配栈空间，该方法仅在变量未被分配位置时起效，否则没有任何操作
-    //也就是说这个方法应该仅仅是在变量被溢出后首次被调用时起效
-    private void allocateStackSpace(String varName) {
-        if (!varStackOffsets.containsKey(varName)) {
-            // 分配新的栈空间并记录偏移
-            varStackOffsets.put(varName, nextStackOffset);
-            nextStackOffset += 4; // 每个变量占4字节
-
-            // 更新当前帧大小
-            currentFrameSize = nextStackOffset;
-        }
+    private Map<String,String> lookupSpillInfo(int instId) {
+        // 获取当前指令的溢出信息
+        Map<String, String> spillInfo = registerAllocator.getFirstSpillInfo(instId);
+        return spillInfo;
     }
 
-    //内部方法： 从栈加载变量到临时寄存器，并一定返回变量最终的临时寄存器位置
-    private String loadFromStack(String varName) {
-        // 确保变量有栈空间
-        allocateStackSpace(varName);
-        int offset = varStackOffsets.get(varName);
-
-        // 查找是否已经加载到某个临时寄存器
-        for (String reg : tempRegisterUse.keySet()) {
-            if (varName.equals(tempRegisterUse.get(reg))) {
-                return reg; // 已经在寄存器中
-            }
-        }
-
-        // 需要加载到新的临时寄存器
-        String tempReg = allocateTempRegister(varName);
-        builder.load(tempReg, "sp", offset);
-        tempRegisterDirty.put(tempReg, false); // 加载后未修改
-
-        return tempReg;
-    }
-
-    // 内部方法：分配临时寄存器，一定返回一个临时寄存器位置
+    /**
+     * 为变量分配一个临时寄存器，如有必要会将旧变量写回栈
+     * @param varName 需要分配寄存器的变量名
+     * @return 分配的寄存器名称
+     */
     private String allocateTempRegister(String varName) {
-        // 首先检查该变量是否已经在寄存器中
-        for (Map.Entry<String, String> entry : tempRegisterUse.entrySet()) {
-            if (varName.equals(entry.getValue())) {
-                return entry.getKey(); // 变量已在寄存器中，直接返回
-            }
-        }
-
-        // 查找空闲的寄存器
+        // 1. 首先尝试找一个空闲的临时寄存器
         for (String reg : tempRegisters) {
             if (!tempRegisterUse.containsKey(reg)) {
                 tempRegisterUse.put(reg, varName);
-                tempRegisterDirty.put(reg, false); // 初始状态为非脏
+                tempRegisterDirty.put(reg, false);
                 return reg;
             }
         }
 
-        // 没有空闲寄存器，需要溢出一个
-        String victimReg = selectVictimRegister();
-
-        // 重新分配寄存器
-        tempRegisterUse.put(victimReg, varName);
-        tempRegisterDirty.put(victimReg, false); // 重置脏状态
-
-        return victimReg;
-    }
-
-    // 内部方法：选择要牺牲的寄存器(可以实现更复杂的策略)，一定返回一个临时寄存器位置
-    private String selectVictimRegister() {
-        String victimReg = null;
-        int latestEnd = -1;
-
-        // 遍历所有已分配的临时寄存器
-        for (String reg : tempRegisterUse.keySet()) {
-            String varName = tempRegisterUse.get(reg);
-
-            // 查找变量的生命周期
-            LiveInterval interval = liveIntervals.get(varName);
-
-            // 如果找不到生命周期信息，可能是临时变量，默认为当前指令结束
-            int endPoint = (interval != null) ? interval.end : instructionId;
-
-            // 选择结束最晚的变量对应的寄存器
-            if (endPoint > latestEnd) {
-                latestEnd = endPoint;
-                victimReg = reg;
+        // 2. 如果没有空闲寄存器，查找可以替换的寄存器
+        for (String reg : tempRegisters) {
+            // 检查寄存器是否被锁定
+            if (tempRegisterLock.getOrDefault(reg, false)) {
+                continue; // 跳过锁定的寄存器
             }
-        }
 
-        // 如果没有找到合适的寄存器(不应该发生)，回退到使用第一个寄存器
-        if (victimReg == null && !tempRegisters.isEmpty()) {
-            victimReg = tempRegisters.get(0);
-        }
+            String oldVarName = tempRegisterUse.get(reg);
 
-        // 处理被牺牲的寄存器中的变量
-        String victimVar = tempRegisterUse.get(victimReg);
-        if (victimVar != null) {
-            if (tempRegisterDirty.getOrDefault(victimReg, false)) {
-                if (isGlobalVariable(victimVar)) {
-                    // 全局变量，需要写回全局变量区
-                    String addrReg = allocateTempRegister("addr_" + victimVar);
-                    builder.la(addrReg, victimVar);
-                    builder.store(victimReg, addrReg, 0);
-                } else if (varStackOffsets.containsKey(victimVar)) {
-                    // 栈上变量，写回栈
-                    int victimOffset = varStackOffsets.get(victimVar);
-                    builder.store(victimReg, "sp", victimOffset);
-                }
-                // 重置脏标记
-                tempRegisterDirty.put(victimReg, false);
-            }
-        }
-
-        return victimReg;
-    }
-
-    // 标记寄存器为已修改
-    private void markRegisterDirty(String reg) {
-        if (tempRegisterUse.containsKey(reg)) {
-            tempRegisterDirty.put(reg, true);
-        }
-    }
-
-    // 函数结束前将所有脏寄存器写回
-    private void flushDirtyRegisters() {
-        for (String reg : new ArrayList<>(tempRegisterUse.keySet())) {
+            // 如果寄存器被修改过，需要将旧值写回栈
             if (tempRegisterDirty.getOrDefault(reg, false)) {
-                String var = tempRegisterUse.get(reg);
-
-                // 区分全局变量和局部变量
-                if (isGlobalVariable(var)) {
-                    // 全局变量，需要写回全局变量区
-                    String addrReg = allocateTempRegister("addr_" + var);
-                    builder.la(addrReg, var);
-                    builder.store(reg, addrReg, 0);
-                } else if (varStackOffsets.containsKey(var)) {
-                    // 局部变量，写回栈
-                    int offset = varStackOffsets.get(var);
-                    builder.store(reg, "sp", offset);
+                // 确保旧变量在栈上有空间
+                if (!varStackOffsets.containsKey(oldVarName)) {
+                    varStackOffsets.put(oldVarName, nextStackOffset);
+                    nextStackOffset += 4;
                 }
 
-                // 重置脏标记
-                tempRegisterDirty.put(reg, false);
+                int offset = varStackOffsets.get(oldVarName);
+                builder.comment("写回栈变量 " + oldVarName);
+                builder.store(reg, "sp", offset);
             }
-        }
-    }
 
-    // 增强版常量加载函数
-    private String loadConstantToRegister(long constValue) {
-        String constKey = "const_" + constValue;
-
-        // 首先检查是否已有寄存器存储了相同的常量值
-        for (Map.Entry<String, String> entry : tempRegisterUse.entrySet()) {
-            if (constKey.equals(entry.getValue()) && constRegisters.contains(entry.getKey())) {
-                return entry.getKey(); // 复用已有的常量寄存器
-            }
+            // 分配寄存器给新变量
+            tempRegisterUse.put(reg, varName);
+            tempRegisterDirty.put(reg, false);
+            return reg;
         }
 
-        // 选择一个常量寄存器
-        String constReg = null;
-
-        // 尝试找到空闲的常量寄存器
+        // 3. 所有临时寄存器都被锁定，尝试使用常量寄存器作为备选
         for (String reg : constRegisters) {
-            if (!tempRegisterUse.containsKey(reg)) {
-                constReg = reg;
-                break;
+            if (!tempRegisterUse.containsKey(reg) || !tempRegisterLock.getOrDefault(reg, false)) {
+                tempRegisterUse.put(reg, varName);
+                tempRegisterDirty.put(reg, false);
+                return reg;
             }
         }
 
-        // 如果没有空闲的常量寄存器，随机选择一个替换
-        if (constReg == null) {
-            constReg = constRegisters.get((int)(System.currentTimeMillis() % constRegisters.size()));
-        }
-
-        // 记录使用情况
-        tempRegisterUse.put(constReg, constKey);
-
-        // 加载常量
-        builder.loadImm(constReg, constValue);
-        tempRegisterDirty.put(constReg, false);
-
-        return constReg;
+        // 4. 如果实在没有可用寄存器，报错
+        builder.comment("错误：无法分配临时寄存器给 " + varName);
+        return "zero"; // 应急措施
     }
 
+    /**
+     * 锁定寄存器，防止被重新分配
+     * @param register 要锁定的寄存器名称
+     */
+    private void lockRegister(String register) {
+        tempRegisterLock.put(register, true);
+    }
+
+    /**
+     * 解锁寄存器，允许它被重新分配
+     * @param register 要解锁的寄存器名称
+     */
+    private void unlockRegister(String register) {
+        tempRegisterLock.put(register, false);
+    }
+
+    /**
+     * 标记寄存器为脏，表示后续需要写回栈
+     * @param register 要标记的寄存器名称
+     */
+    private void markRegisterDirty(String register) {
+        tempRegisterDirty.put(register, true);
+    }
+
+    private void flushDirtyRegisters() {
+        // 遍历所有临时寄存器，将脏寄存器的值写回栈
+        for (String reg : tempRegisters) {
+            if (tempRegisterUse.containsKey(reg) && tempRegisterDirty.getOrDefault(reg, false)) {
+                String varName = tempRegisterUse.get(reg);
+
+                // 如果是栈上变量，写回栈
+                if (varStackOffsets.containsKey(varName)) {
+                    int offset = varStackOffsets.get(varName);
+                    builder.store(reg, "sp", offset);
+                    tempRegisterDirty.put(reg, false);
+                }
+                // 如果是全局变量，写回内存
+                else if (isGlobalVariable(varName)) {
+                    String addrReg = allocateTempRegister("addr_" + varName);
+                    builder.la(addrReg, varName);
+                    builder.store(reg, addrReg, 0);
+                    tempRegisterDirty.put(reg, false);
+                    unlockRegister(addrReg);
+                }
+            }
+        }
+
+        // 常量寄存器也需要检查
+        for (String reg : constRegisters) {
+            if (tempRegisterUse.containsKey(reg) && tempRegisterDirty.getOrDefault(reg, false)) {
+                String varName = tempRegisterUse.get(reg);
+
+                // 处理同上
+                if (varStackOffsets.containsKey(varName)) {
+                    int offset = varStackOffsets.get(varName);
+                    builder.store(reg, "sp", offset);
+                    tempRegisterDirty.put(reg, false);
+                } else if (isGlobalVariable(varName)) {
+                    String addrReg = allocateTempRegister("addr_" + varName);
+                    builder.la(addrReg, varName);
+                    builder.store(reg, addrReg, 0);
+                    tempRegisterDirty.put(reg, false);
+                    unlockRegister(addrReg);
+                }
+            }
+        }
+    }
 
     /**********************************************************************************/
 
 
     private void translateRet(LLVMValueRef inst) {
-        // 获取当前函数名
-        LLVMBasicBlockRef bb = LLVMGetInstructionParent(inst);
-        LLVMValueRef func = LLVMGetBasicBlockParent(bb);
-        String funcName = LLVMGetValueName(func).getString();
+        builder.comment("返回指令");
 
-        boolean isMainFunction = "main".equals(funcName);
-
-        // 仅处理返回值
+        // 检查是否有返回值
         int operandCount = LLVMGetNumOperands(inst);
         if (operandCount > 0) {
             LLVMValueRef retValue = LLVMGetOperand(inst, 0);
-            // 处理返回值...移动到a0寄存器
+
+            // 如果返回值是常量
+            if (LLVMIsAConstant(retValue) != null) {
+                long constValue = LLVMConstIntGetSExtValue(retValue);
+                builder.loadImm("a0", constValue);
+            } else {
+                String retVarName = LLVMGetValueName(retValue).getString();
+                String retReg = lookupRegisterAllocation(retVarName, instructionId);
+                if(retReg == "spill") {
+                    // 如果返回值被溢出
+                    // 检查变量是否已在临时寄存器中
+                    boolean isInTempReg = false;
+                    for (String reg : tempRegisters) {
+                        if (tempRegisterUse.containsKey(reg) &&
+                                tempRegisterUse.get(reg).equals(retVarName)) {
+                            builder.move("a0", reg);
+                            // 避免后续重复处理
+                            isInTempReg = true;
+                            break;
+                        }
+                    }
+                    if(isInTempReg==false){
+                        int offset = varStackOffsets.get(retVarName);
+                        builder.load("a0", "sp", offset);
+                    }
+                }else if(retReg == "global"){
+                    // 如果返回值是全局变量，需要加载到寄存器
+                    String addrReg = allocateTempRegister("addr_" + retVarName);
+                    builder.la(addrReg, retVarName);   // 加载全局变量地址到临时寄存器
+                    builder.load("a0", addrReg, 0);  // 从地址加载值到目标寄存器
+                }else{
+                    //返回值在寄存器上
+                    builder.move("a0",retReg);
+                }
+
+
+            }
         }
 
-        // 对main函数的优化
-        if (isMainFunction) {
-            // main函数无需保存脏寄存器，因为程序将终止
-            // 对于全局变量的情况，可以选择性保存
-            flushGlobalDirtyRegisters(); // 只保存全局变量(如果有需要)
-        } else {
-            // 普通函数需要保存所有脏寄存器
-            flushDirtyRegisters();
-        }
-
-        // 恢复栈帧
+        // 使用函数开始时计算的帧大小
         if (currentFrameSize > 0) {
-            builder.load("ra", "sp", 0);
-            builder.op2("addi", "sp", "sp", String.valueOf(currentFrameSize));
+            builder.load("ra", "sp", 0);  // 恢复返回地址
+            builder.op2("addi", "sp", "sp", String.valueOf(currentFrameSize));  // 恢复栈指针
         }
 
         builder.ret();
-    }
-
-    // 辅助方法：只将全局变量的脏寄存器写回内存
-    private void flushGlobalDirtyRegisters() {
-        for (String reg : new ArrayList<>(tempRegisterUse.keySet())) {
-            if (tempRegisterDirty.getOrDefault(reg, false)) {
-                String var = tempRegisterUse.get(reg);
-                if (isGlobalVariable(var)) {
-                    String addrReg = allocateTempRegister("addr_" + var);
-                    builder.la(addrReg, var);
-                    builder.store(reg, addrReg, 0);
-                    tempRegisterDirty.put(reg, false);
-                }
-            }
-        }
     }
 
     private void translateBinaryOp(LLVMValueRef inst, int opcode) {
@@ -539,47 +528,108 @@ public class IrTranslater {
         // 处理第一个操作数
         String op1Reg;
         if (LLVMIsAConstant(op1) != null) {
-            // 如果是常量，加载到临时寄存器
+            // 如果是常量，加载到常量
             long constValue = LLVMConstIntGetSExtValue(op1);
-            op1Reg = allocateTempRegister("const_temp");
+            op1Reg = "t5";
             builder.loadImm(op1Reg, constValue);
         } else {
             String op1Name = LLVMGetValueName(op1).getString();
-            op1Reg = getVariableRegister(op1Name, instructionId);
+            op1Reg = lookupRegisterAllocation(op1Name, instructionId);
+            if(op1Reg == "spill") {//被溢出，可能在栈/临时寄存器
+                boolean isInTempReg = false;
+                for (String reg : tempRegisters) {
+                    if (tempRegisterUse.containsKey(reg) &&
+                            tempRegisterUse.get(reg).equals(op1Name)) {
+                        op1Reg = reg;
+                        isInTempReg = true;
+                        break;
+                    }
+                }
+                if(isInTempReg==false){
+                   op1Reg = allocateTempRegister(op1Name);
+                }
+            } else if (op1Reg == "global") { // 如果操作数是全局变量，需要先分配一个临时寄存器
+                //这里为了避免两次分配临时寄存器互相覆盖，直接指定寄存器
+                op1Reg = allocateTempRegister(op1Name);
+                lockRegister(op1Reg);
+                String addrReg = allocateTempRegister("addr_" + op1Name);
+                builder.la(addrReg, op1Name);   // 加载全局变量地址到临时寄存器
+                builder.load(op1Reg, addrReg, 0);  // 从地址加载值到目标寄存器
+            }else{//查询到操作数在寄存器上，操作数一定已经定义过，这里的寄存器位置一定不是表示这条指令完成后的位置
+                lockRegister(op1Reg);
+            }
         }
+        markRegisterDirty(op1Reg);
+        lockRegister(op1Reg);
+
 
         // 处理第二个操作数
         String op2Reg;
         if (LLVMIsAConstant(op2) != null) {
+            // 如果是常量，加载到临时寄存器
             long constValue = LLVMConstIntGetSExtValue(op2);
-            // 对于简单指令，可以直接使用立即数
-            if ((opcode == LLVMAdd || opcode == LLVMSub) && constValue >= -2048 && constValue <= 2047) {
-                op2Reg = String.valueOf(constValue);
-            } else {
-                op2Reg = allocateTempRegister("const_temp2");
-                builder.loadImm(op2Reg, constValue);
-            }
+            op2Reg = "t6";
+            builder.loadImm(op2Reg, constValue);
         } else {
             String op2Name = LLVMGetValueName(op2).getString();
-            op2Reg = getVariableRegister(op2Name, instructionId);
+            op2Reg = lookupRegisterAllocation(op2Name, instructionId);
+            if(op2Reg == "spill") {//被溢出，可能在栈/临时寄存器
+                boolean isInTempReg = false;
+                for (String reg : tempRegisters) {
+                    if (tempRegisterUse.containsKey(reg) &&
+                            tempRegisterUse.get(reg).equals(op2Name)) {
+                        op2Reg = reg;
+                        isInTempReg = true;
+                        break;
+                    }
+                }
+                if(isInTempReg==false){
+                    op2Reg = allocateTempRegister(op2Name);
+                }
+            } else if (op2Reg == "global") { // 如果操作数是全局变量，需要先分配一个临时寄存器
+                //这里为了避免两次分配临时寄存器互相覆盖，直接指定寄存器
+                op2Reg = allocateTempRegister(op2Name);
+                lockRegister(op2Reg);
+                String addrReg = allocateTempRegister("addr_" + op2Name);
+                builder.la(addrReg, op2Name);   // 加载全局变量地址到临时寄存器
+                builder.load(op2Reg, addrReg, 0);  // 从地址加载值到目标寄存器
+                //此时t3解放了，但是t2还有用，在这个指令期间不能改变
+            }else{//查询到操作数在寄存器上，操作数一定已经定义过，这里的寄存器位置一定不是表示这条指令完成后的位置
+                //什么也不做
+            }
         }
+        markRegisterDirty(op2Reg);
+        lockRegister(op2Reg);
 
-        // 正确用法：通过 getVariableRegister 获取位置
-        String destReg = getVariableRegister(destVar, instructionId);
-        markRegisterDirty(destReg);
+
+        String destReg = lookupRegisterAllocation(destVar, instructionId);
+        if(destReg.equals("spill")) {
+            // 结果需要溢出到栈上，分配临时寄存器
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
+        } else if(destReg.equals("global")) {
+            // 结果写入全局变量，需要临时寄存器存结果
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
+        } else  {
+            // 结果在非临时寄存器中，什么也不做
+        }
+        lockRegister(destReg);
 
         // 生成计算指令
-        if (opcode == LLVMAdd && op2Reg.matches("-?\\d+")) {
-            // 对于加法，可以使用带立即数的addi指令
-            builder.op2("addi", destReg, op1Reg, op2Reg);
-        } else if (opcode == LLVMSub && op2Reg.matches("-?\\d+")) {
-            // 对于减法，取反立即数，使用addi
-            int imm = -Integer.parseInt(op2Reg);
-            builder.op2("addi", destReg, op1Reg, String.valueOf(imm));
-        } else {
-            // 其他情况使用三操作数指令
-            builder.op3(operation, destReg, op1Reg, op2Reg);
+        builder.op3(operation, destReg, op1Reg, op2Reg);
+        unlockRegister(op1Reg);
+        unlockRegister(op2Reg);
+
+        // 如果目标是全局变量，需要将结果写回
+        if(lookupRegisterAllocation(destVar, instructionId).equals("global")) {
+            // 分配临时寄存器用于加载地址
+            String addrReg = allocateTempRegister("addr_" + destVar);
+            builder.la(addrReg, destVar);  // 加载全局变量地址到临时寄存器
+            builder.store(destReg, addrReg, 0);  // 将结果存储到全局变量内存位置
+            tempRegisterDirty.put(destReg, false);  // 结果已写回，取消脏标记
         }
+        unlockRegister(destReg);
     }
 
     private void translateLoad(LLVMValueRef inst) {
@@ -589,35 +639,60 @@ public class IrTranslater {
 
         builder.comment("加载 " + destVar + " 从 " + pointerName);
 
-        // 获取目标寄存器
-        String destReg;
-        Location destLoc = registerAllocator.getLocation(instructionId, destVar);
+        // 处理指针
+        String ptrReg;
+        if (isGlobalVariable(pointerName)) {
+            // 指针是全局变量
+            ptrReg = allocateTempRegister("addr_" + pointerName);
+            builder.la(ptrReg, pointerName);
+        } else {
+            // 指针是局部变量
+            ptrReg = lookupRegisterAllocation(pointerName, instructionId);
+            if(ptrReg == "spill") {
+                boolean isInTempReg = false;
+                for (String reg : tempRegisters) {
+                    if (tempRegisterUse.containsKey(reg) &&
+                            tempRegisterUse.get(reg).equals(pointerName)) {
+                        ptrReg = reg;
+                        isInTempReg = true;
+                        break;
+                    }
+                }
+                if(!isInTempReg) {
+                    ptrReg = allocateTempRegister(pointerName);
+                    int offset = varStackOffsets.get(pointerName);
+                    builder.load(ptrReg, "sp", offset);
+                }
+            }
+        }
+        lockRegister(ptrReg);
 
-        if (destLoc == null) {
-            // destLoc为null，说明是全局变量
-            String tempReg = allocateTempRegister(destVar);
-            destReg = tempReg;
-            // 全局变量不需要管理栈空间
-        } else if (destLoc.type == Location.LocationType.STACK) {
-            // 目标在栈上，需要临时寄存器
+        // 获取目标寄存器
+        String destReg = lookupRegisterAllocation(destVar, instructionId);
+        if(destReg.equals("spill")) {
             destReg = allocateTempRegister(destVar);
             markRegisterDirty(destReg);
-        } else {
-            // 目标在寄存器中
-            destReg = destLoc.register;
+        } else if(destReg.equals("global")) {
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
+        }
+        lockRegister(destReg);
+
+        // 执行加载操作
+        builder.load(destReg, ptrReg, 0);
+
+        // 解锁指针寄存器
+        unlockRegister(ptrReg);
+
+        // 如果目标是全局变量，需要将结果写回
+        if(lookupRegisterAllocation(destVar, instructionId).equals("global")) {
+            String addrReg = allocateTempRegister("addr_" + destVar);
+            builder.la(addrReg, destVar);
+            builder.store(destReg, addrReg, 0);
+            tempRegisterDirty.put(destReg, false);
         }
 
-        // 处理指针，它可能指向全局变量或局部变量
-        if (isGlobalVariable(pointerName)) {
-            // 指针指向全局变量，需要两步：加载地址，然后加载值
-            String addrReg = allocateTempRegister("addr_" + pointerName);
-            builder.la(addrReg, pointerName);   // 加载全局变量地址到临时寄存器
-            builder.load(destReg, addrReg, 0);  // 从地址加载值到目标寄存器
-        } else {
-            // 指针是局部变量，获取指针的寄存器位置
-            String pointerReg = getVariableRegister(pointerName, instructionId);
-            builder.load(destReg, pointerReg, 0); // 通过指针加载值到目标寄存器
-        }
+        unlockRegister(destReg);
     }
 
     private void translateStore(LLVMValueRef inst) {
@@ -627,7 +702,7 @@ public class IrTranslater {
 
         builder.comment("存储到 " + pointerName);
 
-        // 获取源值
+        // 处理源值
         String valueReg;
         if (LLVMIsAConstant(valueRef) != null) {
             // 值是常量
@@ -637,144 +712,296 @@ public class IrTranslater {
         } else {
             // 值是变量
             String valueName = LLVMGetValueName(valueRef).getString();
-            valueReg = getVariableRegister(valueName, instructionId);
+            valueReg = lookupRegisterAllocation(valueName, instructionId);
+            if(valueReg == "spill") {
+                boolean isInTempReg = false;
+                for (String reg : tempRegisters) {
+                    if (tempRegisterUse.containsKey(reg) &&
+                            tempRegisterUse.get(reg).equals(valueName)) {
+                        valueReg = reg;
+                        isInTempReg = true;
+                        break;
+                    }
+                }
+                if(!isInTempReg) {
+                    valueReg = allocateTempRegister(valueName);
+                    int offset = varStackOffsets.get(valueName);
+                    builder.load(valueReg, "sp", offset);
+                }
+            } else if (valueReg == "global") {
+                valueReg = allocateTempRegister(valueName);
+                lockRegister(valueReg);
+                String addrReg = allocateTempRegister("addr_" + valueName);
+                builder.la(addrReg, valueName);
+                builder.load(valueReg, addrReg, 0);
+                unlockRegister(addrReg);
+            }
         }
+        lockRegister(valueReg);
 
-        // 处理指针，它可能指向全局变量或局部变量
+        // 处理指针
+        String ptrReg;
         if (isGlobalVariable(pointerName)) {
-            // 指针指向全局变量，需要两步：加载地址，然后存储值
-            String addrReg = allocateTempRegister("addr_" + pointerName);
-            builder.la(addrReg, pointerName);   // 加载全局变量地址到临时寄存器
-            builder.store(valueReg, addrReg, 0); // 将值存储到地址
+            // 指针指向全局变量
+            ptrReg = allocateTempRegister("addr_" + pointerName);
+            builder.la(ptrReg, pointerName);
         } else {
-            // 指针是局部变量，获取指针的寄存器位置
-            Location pointerLoc = registerAllocator.getLocation(instructionId, pointerName);
-
-            if (pointerLoc == null) {
-                // 这种情况不应该发生，因为局部变量应该有位置分配
-                builder.comment("警告：指针 " + pointerName + " 没有位置信息");
-                return;
-            }
-
-            if (pointerLoc.type == Location.LocationType.REGISTER) {
-                // 指针在寄存器中
-                String pointerReg = pointerLoc.register;
-                builder.store(valueReg, pointerReg, 0); // 通过指针存储值
-            } else {
-                // 指针在栈上，需要先加载到寄存器
-                String pointerReg = loadFromStack(pointerName);
-                builder.store(valueReg, pointerReg, 0); // 通过指针存储值
+            // 指针是局部变量
+            ptrReg = lookupRegisterAllocation(pointerName, instructionId);
+            if(ptrReg == "spill") {
+                boolean isInTempReg = false;
+                for (String reg : tempRegisters) {
+                    if (tempRegisterUse.containsKey(reg) &&
+                            tempRegisterUse.get(reg).equals(pointerName)) {
+                        ptrReg = reg;
+                        isInTempReg = true;
+                        break;
+                    }
+                }
+                if(!isInTempReg) {
+                    ptrReg = allocateTempRegister(pointerName);
+                    int offset = varStackOffsets.get(pointerName);
+                    builder.load(ptrReg, "sp", offset);
+                }
+            } else if (ptrReg == "global") {
+                ptrReg = allocateTempRegister(pointerName);
+                lockRegister(ptrReg);
+                String addrReg = allocateTempRegister("addr_" + pointerName);
+                builder.la(addrReg, pointerName);
+                builder.load(ptrReg, addrReg, 0);
+                unlockRegister(addrReg);
             }
         }
+        lockRegister(ptrReg);
+
+        // 执行存储操作
+        builder.store(valueReg, ptrReg, 0);
+
+        // 解锁寄存器
+        unlockRegister(valueReg);
+        unlockRegister(ptrReg);
     }
 
     private void translateBr(LLVMValueRef inst) {
         int operandCount = LLVMGetNumOperands(inst);
 
         if (operandCount == 1) {
-            // 无条件跳转
-            LLVMValueRef targetBlock = LLVMGetOperand(inst, 0);
-            String targetName = LLVMGetBasicBlockName(LLVMValueAsBasicBlock(targetBlock)).getString();
+            // 无条件分支
+            LLVMValueRef dest = LLVMGetOperand(inst, 0);
+            String label = LLVMGetBasicBlockName(LLVMValueAsBasicBlock(dest)).getString();
+            builder.comment("无条件跳转到 " + label);
 
-            // 首先保存所有脏寄存器
-            flushDirtyRegisters();
+            // 在跳转前确保所有脏寄存器的值都写回了栈
+            for (String reg : tempRegisters) {
+                if (tempRegisterUse.containsKey(reg) && tempRegisterDirty.getOrDefault(reg, false)) {
+                    String varName = tempRegisterUse.get(reg);
+                    if (varStackOffsets.containsKey(varName)) {
+                        int offset = varStackOffsets.get(varName);
+                        builder.store(reg, "sp", offset);
+                        tempRegisterDirty.put(reg, false);
+                    }
+                }
+            }
 
-            builder.jump(targetName);
+            builder.jump(label);
         } else if (operandCount == 3) {
-            // 条件跳转
-            LLVMValueRef condition = LLVMGetOperand(inst, 0);
-            LLVMValueRef trueBlock = LLVMGetOperand(inst, 1);
-            LLVMValueRef falseBlock = LLVMGetOperand(inst, 2);
+            // 条件分支
+            LLVMValueRef condValue = LLVMGetOperand(inst, 0);
+            LLVMValueRef trueDest = LLVMGetOperand(inst, 1);
+            LLVMValueRef falseDest = LLVMGetOperand(inst, 2);
 
-            String condName = LLVMGetValueName(condition).getString();
-            String trueLabel = LLVMGetBasicBlockName(LLVMValueAsBasicBlock(trueBlock)).getString();
-            String falseLabel = LLVMGetBasicBlockName(LLVMValueAsBasicBlock(falseBlock)).getString();
+            String trueLabel = LLVMGetBasicBlockName(LLVMValueAsBasicBlock(trueDest)).getString();
+            String falseLabel = LLVMGetBasicBlockName(LLVMValueAsBasicBlock(falseDest)).getString();
 
-            // 获取条件寄存器
-            String condReg = getVariableRegister(condName, instructionId);
+            builder.comment("条件跳转: 如果为真则去 " + trueLabel + " 否则去 " + falseLabel);
 
-            // 首先保存所有脏寄存器
-            flushDirtyRegisters();
+            // 获取条件值的寄存器
+            String condReg;
+            if (LLVMIsAConstant(condValue) != null) {
+                // 条件是常量
+                long constValue = LLVMConstIntGetSExtValue(condValue);
+                condReg = allocateTempRegister("cond_temp");
+                builder.loadImm(condReg, constValue);
+            } else {
+                // 条件是变量
+                String condName = LLVMGetValueName(condValue).getString();
+                condReg = lookupRegisterAllocation(condName, instructionId);
+                if(condReg == "spill") {
+                    boolean isInTempReg = false;
+                    for (String reg : tempRegisters) {
+                        if (tempRegisterUse.containsKey(reg) &&
+                                tempRegisterUse.get(reg).equals(condName)) {
+                            condReg = reg;
+                            isInTempReg = true;
+                            break;
+                        }
+                    }
+                    if(!isInTempReg) {
+                        condReg = allocateTempRegister(condName);
+                        int offset = varStackOffsets.get(condName);
+                        builder.load(condReg, "sp", offset);
+                    }
+                } else if (condReg == "global") {
+                    condReg = allocateTempRegister(condName);
+                    lockRegister(condReg);
+                    String addrReg = allocateTempRegister("addr_" + condName);
+                    builder.la(addrReg, condName);
+                    builder.load(condReg, addrReg, 0);
+                    unlockRegister(addrReg);
+                }
+            }
+            lockRegister(condReg);
 
-            // 条件跳转：如果条件非零，跳转到true分支
-            builder.op2("beq", condReg, "zero", falseLabel);
-            builder.jump(trueLabel);
+            // 在跳转前确保所有脏寄存器的值都写回了栈
+            for (String reg : tempRegisters) {
+                if (tempRegisterUse.containsKey(reg) && tempRegisterDirty.getOrDefault(reg, false)) {
+                    String varName = tempRegisterUse.get(reg);
+                    if (varStackOffsets.containsKey(varName)) {
+                        int offset = varStackOffsets.get(varName);
+                        builder.store(reg, "sp", offset);
+                        tempRegisterDirty.put(reg, false);
+                    }
+                }
+            }
+
+            // 条件分支指令
+            builder.branch("bnez", condReg, trueLabel);
+            builder.jump(falseLabel); // 如果条件为假，跳转到假分支
+
+            unlockRegister(condReg);
         }
     }
 
     private void translateICmp(LLVMValueRef inst) {
-        // 获取操作数
+        // 获取操作数和结果变量名
         LLVMValueRef op1 = LLVMGetOperand(inst, 0);
         LLVMValueRef op2 = LLVMGetOperand(inst, 1);
         String destVar = LLVMGetValueName(inst).getString();
-
-        // 获取比较谓词
         int predicate = LLVMGetICmpPredicate(inst);
-        String op = getComparisonOp(predicate);
 
-        // 处理操作数
+        // 处理第一个操作数
         String op1Reg;
         if (LLVMIsAConstant(op1) != null) {
             long constValue = LLVMConstIntGetSExtValue(op1);
-            if (constValue == 0 && (predicate == LLVMIntEQ || predicate == LLVMIntNE)) {
-                // 与零比较的特殊情况
-                op1Reg = "zero";
-            } else {
-                // 使用专门的常量加载方法
-                op1Reg = loadConstantToRegister(constValue);
-            }
+            op1Reg = "t5";
+            builder.loadImm(op1Reg, constValue);
         } else {
             String op1Name = LLVMGetValueName(op1).getString();
-            op1Reg = getVariableRegister(op1Name, instructionId);
+            op1Reg = lookupRegisterAllocation(op1Name, instructionId);
+            if(op1Reg == "spill") {
+                boolean isInTempReg = false;
+                for (String reg : tempRegisters) {
+                    if (tempRegisterUse.containsKey(reg) &&
+                            tempRegisterUse.get(reg).equals(op1Name)) {
+                        op1Reg = reg;
+                        isInTempReg = true;
+                        break;
+                    }
+                }
+                if(!isInTempReg) {
+                    op1Reg = allocateTempRegister(op1Name);
+                    int offset = varStackOffsets.get(op1Name);
+                    builder.load(op1Reg, "sp", offset);
+                }
+            } else if (op1Reg == "global") {
+                op1Reg = allocateTempRegister(op1Name);
+                lockRegister(op1Reg);
+                String addrReg = allocateTempRegister("addr_" + op1Name);
+                builder.la(addrReg, op1Name);
+                builder.load(op1Reg, addrReg, 0);
+                unlockRegister(addrReg);
+            }
         }
+        lockRegister(op1Reg);
 
+        // 处理第二个操作数
         String op2Reg;
         if (LLVMIsAConstant(op2) != null) {
             long constValue = LLVMConstIntGetSExtValue(op2);
-            if (constValue == 0 && (predicate == LLVMIntEQ || predicate == LLVMIntNE)) {
-                // 与零比较的特殊情况
-                op2Reg = "zero";
-            } else {
-                // 使用专门的常量加载方法
-                op2Reg = loadConstantToRegister(constValue);
-            }
+            op2Reg = "t6";
+            builder.loadImm(op2Reg, constValue);
         } else {
             String op2Name = LLVMGetValueName(op2).getString();
-            op2Reg = getVariableRegister(op2Name, instructionId);
+            op2Reg = lookupRegisterAllocation(op2Name, instructionId);
+            if(op2Reg == "spill") {
+                boolean isInTempReg = false;
+                for (String reg : tempRegisters) {
+                    if (tempRegisterUse.containsKey(reg) &&
+                            tempRegisterUse.get(reg).equals(op2Name)) {
+                        op2Reg = reg;
+                        isInTempReg = true;
+                        break;
+                    }
+                }
+                if(!isInTempReg) {
+                    op2Reg = allocateTempRegister(op2Name);
+                    int offset = varStackOffsets.get(op2Name);
+                    builder.load(op2Reg, "sp", offset);
+                }
+            } else if (op2Reg == "global") {
+                op2Reg = allocateTempRegister(op2Name);
+                lockRegister(op2Reg);
+                String addrReg = allocateTempRegister("addr_" + op2Name);
+                builder.la(addrReg, op2Name);
+                builder.load(op2Reg, addrReg, 0);
+                unlockRegister(addrReg);
+            }
         }
+        lockRegister(op2Reg);
 
-        // 获取结果存储位置
-        String destReg = getVariableRegister(destVar, instructionId);
-        markRegisterDirty(destReg);
+        // 获取结果寄存器
+        String destReg = lookupRegisterAllocation(destVar, instructionId);
+        if(destReg.equals("spill")) {
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
+        } else if(destReg.equals("global")) {
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
+        }
+        lockRegister(destReg);
 
         // 根据比较类型生成指令
         switch (predicate) {
             case LLVMIntEQ:  // 等于
                 builder.op3("xor", destReg, op1Reg, op2Reg);
-                builder.op3("seqz", destReg, destReg, ""); // 如果为0则设为1
+                builder.op3("seqz", destReg, destReg, "");
                 break;
             case LLVMIntNE:  // 不等于
                 builder.op3("xor", destReg, op1Reg, op2Reg);
-                builder.op3("snez", destReg, destReg, ""); // 如果非0则设为1
+                builder.op3("snez", destReg, destReg, "");
                 break;
             case LLVMIntSGT:  // 有符号大于
                 builder.op3("sgt", destReg, op1Reg, op2Reg);
                 break;
             case LLVMIntSGE:  // 有符号大于等于
                 builder.op3("slt", destReg, op1Reg, op2Reg);
-                builder.op3("xori", destReg, destReg, "1"); // 取反
+                builder.op3("xori", destReg, destReg, "1");
                 break;
             case LLVMIntSLT:  // 有符号小于
                 builder.op3("slt", destReg, op1Reg, op2Reg);
                 break;
             case LLVMIntSLE:  // 有符号小于等于
                 builder.op3("sgt", destReg, op1Reg, op2Reg);
-                builder.op3("xori", destReg, destReg, "1"); // 取反
+                builder.op3("xori", destReg, destReg, "1");
                 break;
             default:
                 builder.comment("不支持的比较类型: " + predicate);
                 break;
         }
+
+        // 解锁操作数寄存器
+        unlockRegister(op1Reg);
+        unlockRegister(op2Reg);
+
+        // 如果目标是全局变量，需要将结果写回
+        if(lookupRegisterAllocation(destVar, instructionId).equals("global")) {
+            String addrReg = allocateTempRegister("addr_" + destVar);
+            builder.la(addrReg, destVar);
+            builder.store(destReg, addrReg, 0);
+            tempRegisterDirty.put(destReg, false);
+        }
+
+        unlockRegister(destReg);
     }
 
     private String getComparisonOp(int predicate) {
@@ -795,18 +1022,38 @@ public class IrTranslater {
 
     private void translateAlloca(LLVMValueRef inst) {
         String varName = LLVMGetValueName(inst).getString();
-
         builder.comment("栈分配 " + varName);
 
-        // 获取指针变量的寄存器位置 - 通过 getVariableRegister
-        String addrReg = getVariableRegister(varName + "_ptr", instructionId);
+        // 为变量分配栈空间
+        if (!varStackOffsets.containsKey(varName)) {
+            varStackOffsets.put(varName, nextStackOffset);
+            nextStackOffset += 4; // 每个变量占4字节
+        }
 
-        // 对于指针类型，我们需要让它指向栈上的位置
-        // 在 getVariableRegister 内部会处理栈分配
-        int offset = varStackOffsets.get(varName + "_ptr");
+        // 获取目标寄存器位置
+        String destReg = lookupRegisterAllocation(varName, instructionId);
+        if(destReg.equals("spill")) {
+            destReg = allocateTempRegister(varName);
+            markRegisterDirty(destReg);
+        } else if(destReg.equals("global")) {
+            destReg = allocateTempRegister(varName);
+            markRegisterDirty(destReg);
+        }
+        lockRegister(destReg);
 
-        // 计算地址
-        builder.op2("addi", addrReg, "sp", String.valueOf(offset));
+        // 计算栈上地址并存入目标寄存器
+        int offset = varStackOffsets.get(varName);
+        builder.op2("addi", destReg, "sp", String.valueOf(offset));
+
+        // 如果目标是全局变量，需要将结果写回
+        if(lookupRegisterAllocation(varName, instructionId).equals("global")) {
+            String addrReg = allocateTempRegister("addr_" + varName);
+            builder.la(addrReg, varName);
+            builder.store(destReg, addrReg, 0);
+            tempRegisterDirty.put(destReg, false);
+        }
+
+        unlockRegister(destReg);
     }
 
     private void translateGetElementPtr(LLVMValueRef inst) {
@@ -817,52 +1064,116 @@ public class IrTranslater {
         builder.comment("计算指针 " + destVar);
 
         // 获取基地址
-        String baseReg = getVariableRegister(baseName, instructionId);
+        String baseReg;
+        if (isGlobalVariable(baseName)) {
+            baseReg = allocateTempRegister("addr_" + baseName);
+            builder.la(baseReg, baseName);
+        } else {
+            baseReg = lookupRegisterAllocation(baseName, instructionId);
+            if(baseReg == "spill") {
+                boolean isInTempReg = false;
+                for (String reg : tempRegisters) {
+                    if (tempRegisterUse.containsKey(reg) &&
+                            tempRegisterUse.get(reg).equals(baseName)) {
+                        baseReg = reg;
+                        isInTempReg = true;
+                        break;
+                    }
+                }
+                if(!isInTempReg) {
+                    baseReg = allocateTempRegister(baseName);
+                    int offset = varStackOffsets.get(baseName);
+                    builder.load(baseReg, "sp", offset);
+                }
+            } else if (baseReg == "global") {
+                baseReg = allocateTempRegister(baseName);
+                lockRegister(baseReg);
+                String addrReg = allocateTempRegister("addr_" + baseName);
+                builder.la(addrReg, baseName);
+                builder.load(baseReg, addrReg, 0);
+                unlockRegister(addrReg);
+            }
+        }
+        lockRegister(baseReg);
 
         // 获取目标寄存器
-        String destReg;
-        Location destLoc = registerAllocator.getLocation(instructionId, destVar);
-
-        if (destLoc == null || destLoc.type == Location.LocationType.STACK) {
+        String destReg = lookupRegisterAllocation(destVar, instructionId);
+        if(destReg.equals("spill")) {
             destReg = allocateTempRegister(destVar);
-            allocateStackSpace(destVar);
             markRegisterDirty(destReg);
-        } else {
-            destReg = destLoc.register;
+        } else if(destReg.equals("global")) {
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
         }
+        lockRegister(destReg);
 
-        // 如果只有一个索引，可能是数组元素访问
+        // 处理索引和偏移计算
         if (LLVMGetNumOperands(inst) == 2) {
+            // 只有一个索引，可能是全局变量直接索引
             builder.move(destReg, baseReg);
         } else if (LLVMGetNumOperands(inst) == 3) {
-            // 有两个索引，计算偏移量
+            // 有两个索引，通常第一个是0，第二个是实际索引
             LLVMValueRef indexValue = LLVMGetOperand(inst, 2);
-
             if (LLVMIsAConstant(indexValue) != null) {
-                // 常量索引
                 long index = LLVMConstIntGetSExtValue(indexValue);
-                int offset = (int) (index * 4); // 假设每个元素4字节
+                long offset = index * 4; // 假设元素大小为4字节
 
                 if (offset == 0) {
-                    // 无需偏移，直接使用基地址
                     builder.move(destReg, baseReg);
                 } else {
-                    // 计算地址 = 基地址 + 偏移量
                     builder.op2("addi", destReg, baseReg, String.valueOf(offset));
                 }
             } else {
-                // 变量索引，需要计算
+                // 如果索引是变量，需要先加载，然后计算偏移
                 String indexName = LLVMGetValueName(indexValue).getString();
-                String indexReg = getVariableRegister(indexName, instructionId);
-                String tempReg = allocateTempRegister("index_temp");
+                String indexReg = lookupRegisterAllocation(indexName, instructionId);
+                if(indexReg == "spill") {
+                    boolean isInTempReg = false;
+                    for (String reg : tempRegisters) {
+                        if (tempRegisterUse.containsKey(reg) &&
+                                tempRegisterUse.get(reg).equals(indexName)) {
+                            indexReg = reg;
+                            isInTempReg = true;
+                            break;
+                        }
+                    }
+                    if(!isInTempReg) {
+                        indexReg = allocateTempRegister(indexName);
+                        int offset = varStackOffsets.get(indexName);
+                        builder.load(indexReg, "sp", offset);
+                    }
+                } else if (indexReg == "global") {
+                    indexReg = allocateTempRegister(indexName);
+                    lockRegister(indexReg);
+                    String addrReg = allocateTempRegister("addr_" + indexName);
+                    builder.la(addrReg, indexName);
+                    builder.load(indexReg, addrReg, 0);
+                    unlockRegister(addrReg);
+                }
+                lockRegister(indexReg);
 
-                // 计算偏移量 = 索引 * 4
-                builder.op2("slli", tempReg, indexReg, "2"); // 左移2位相当于乘4
+                // 计算偏移地址：基地址 + 索引*4
+                String tempReg = allocateTempRegister("temp_index_mult");
+                builder.op2("slli", tempReg, indexReg, "2"); // 乘以4
+                builder.op3("add", destReg, baseReg, tempReg); // 基地址+偏移
 
-                // 计算最终地址
-                builder.op3("add", destReg, baseReg, tempReg);
+                unlockRegister(indexReg);
+                unlockRegister(tempReg);
             }
         }
+
+        // 解锁基地址寄存器
+        unlockRegister(baseReg);
+
+        // 如果目标是全局变量，需要将结果写回
+        if(lookupRegisterAllocation(destVar, instructionId).equals("global")) {
+            String addrReg = allocateTempRegister("addr_" + destVar);
+            builder.la(addrReg, destVar);
+            builder.store(destReg, addrReg, 0);
+            tempRegisterDirty.put(destReg, false);
+        }
+
+        unlockRegister(destReg);
     }
 
     private void translateSwitch(LLVMValueRef inst) {
@@ -870,63 +1181,91 @@ public class IrTranslater {
 
         // 获取条件值
         LLVMValueRef condition = LLVMGetOperand(inst, 0);
-        String condName = LLVMGetValueName(condition).getString();
-        String condReg = getVariableRegister(condName, instructionId);
 
-        // 获取默认分支（第1个操作数）
+        // 处理条件寄存器
+        String condReg;
+        if (LLVMIsAConstant(condition) != null) {
+            // 条件是常量
+            long constValue = LLVMConstIntGetSExtValue(condition);
+            condReg = allocateTempRegister("cond_temp");
+            builder.loadImm(condReg, constValue);
+        } else {
+            // 条件是变量
+            String condName = LLVMGetValueName(condition).getString();
+            condReg = lookupRegisterAllocation(condName, instructionId);
+            if(condReg.equals("spill")) {
+                // 条件在栈上，需要加载到寄存器
+                condReg = allocateTempRegister(condName);
+                int offset = varStackOffsets.get(condName);
+                builder.load(condReg, "sp", offset);
+            } else if(condReg.equals("global")) {
+                // 条件是全局变量，需要加载到寄存器
+                condReg = allocateTempRegister(condName);
+                String addrReg = allocateTempRegister("addr_" + condName);
+                builder.la(addrReg, condName);
+                builder.load(condReg, addrReg, 0);
+                unlockRegister(addrReg);
+            }
+        }
+        lockRegister(condReg);
+
+        // 获取默认分支
         LLVMValueRef defaultDest = LLVMGetOperand(inst, 1);
         String defaultLabel = LLVMGetBasicBlockName(LLVMValueAsBasicBlock(defaultDest)).getString();
 
         // 保存所有脏寄存器
         flushDirtyRegisters();
 
-        // 获取case数量（(操作数数量-2)/2，因为每个case有一个值和一个目标）
+        // 获取case数量
         int operandCount = LLVMGetNumOperands(inst);
         int caseCount = (operandCount - 2) / 2;
 
         if (caseCount == 0) {
             // 如果没有case分支，直接跳到默认分支
             builder.jump(defaultLabel);
+            unlockRegister(condReg);
             return;
         }
 
         // 遍历所有case
         for (int i = 0; i < caseCount; i++) {
-            // case值在操作数列表中的偶数位置（从2开始）
+            // 获取case值和目标
             LLVMValueRef caseValue = LLVMGetOperand(inst, 2 + i*2);
-            // case目标在操作数列表中的奇数位置（从3开始）
             LLVMValueRef caseDest = LLVMGetOperand(inst, 3 + i*2);
 
             // 确保我们获取到了整数常量
             long caseConstant = 0;
             if (LLVMIsAConstantInt(caseValue) != null) {
                 caseConstant = LLVMConstIntGetSExtValue(caseValue);
-            } else {
-                builder.comment("警告：非常量case值");
-                continue;
             }
 
             String caseLabel = LLVMGetBasicBlockName(LLVMValueAsBasicBlock(caseDest)).getString();
 
             // 比较条件值与case值
             String tempReg = allocateTempRegister("switch_temp");
+            lockRegister(tempReg);
 
             // 立即数比较
             if (caseConstant >= -2048 && caseConstant <= 2047) {
-                builder.op2("addi", tempReg, condReg, "-" + caseConstant);
+                // 小的立即数可以直接在RISC-V中比较
+                builder.op2("addi", tempReg, condReg, String.valueOf(-caseConstant));
             } else {
-                // 大常量需要先加载
-                String constReg = allocateTempRegister("const_temp");
+                // 大的立即数需要先加载到寄存器
+                String constReg = allocateTempRegister("case_const");
+                lockRegister(constReg);
                 builder.loadImm(constReg, caseConstant);
                 builder.op3("sub", tempReg, condReg, constReg);
+                unlockRegister(constReg);
             }
 
             // 如果相等（差值为0），跳转到对应分支
             builder.op2("beq", tempReg, "zero", caseLabel);
+            unlockRegister(tempReg);
         }
 
         // 所有case都不匹配，跳转到默认分支
         builder.jump(defaultLabel);
+        unlockRegister(condReg);
     }
 
     private void translateBitwiseOp(LLVMValueRef inst, int opcode) {
@@ -947,58 +1286,113 @@ public class IrTranslater {
         // 处理第一个操作数
         String op1Reg;
         if (LLVMIsAConstant(op1) != null) {
-            // 如果是常量，加载到临时寄存器
+            // 如果是常量，加载到常量寄存器
             long constValue = LLVMConstIntGetSExtValue(op1);
-            op1Reg = allocateTempRegister("const_temp");
+            op1Reg = "t5";
             builder.loadImm(op1Reg, constValue);
         } else {
             String op1Name = LLVMGetValueName(op1).getString();
-            op1Reg = getVariableRegister(op1Name, instructionId);
+            op1Reg = lookupRegisterAllocation(op1Name, instructionId);
+            if(op1Reg == "spill") {
+                // 被溢出，可能在栈/临时寄存器
+                boolean isInTempReg = false;
+                for (String reg : tempRegisters) {
+                    if (tempRegisterUse.containsKey(reg) &&
+                            tempRegisterUse.get(reg).equals(op1Name)) {
+                        op1Reg = reg;
+                        isInTempReg = true;
+                        break;
+                    }
+                }
+                if(!isInTempReg) {
+                    op1Reg = allocateTempRegister(op1Name);
+                    int offset = varStackOffsets.get(op1Name);
+                    builder.load(op1Reg, "sp", offset);
+                }
+            } else if (op1Reg == "global") {
+                op1Reg = allocateTempRegister(op1Name);
+                lockRegister(op1Reg);
+                String addrReg = allocateTempRegister("addr_" + op1Name);
+                builder.la(addrReg, op1Name);
+                builder.load(op1Reg, addrReg, 0);
+                unlockRegister(addrReg);
+            }
         }
+        markRegisterDirty(op1Reg);
+        lockRegister(op1Reg);
 
         // 处理第二个操作数
         String op2Reg;
         if (LLVMIsAConstant(op2) != null) {
             long constValue = LLVMConstIntGetSExtValue(op2);
-            // 对于位运算，可以直接使用立即数
-            if (constValue >= -2048 && constValue <= 2047) {
-                op2Reg = String.valueOf(constValue);
-                operation += "i"; // 使用立即数版本的指令
-            } else {
-                op2Reg = allocateTempRegister("const_temp2");
-                builder.loadImm(op2Reg, constValue);
-            }
+            op2Reg = "t6";
+            builder.loadImm(op2Reg, constValue);
         } else {
             String op2Name = LLVMGetValueName(op2).getString();
-            op2Reg = getVariableRegister(op2Name, instructionId);
+            op2Reg = lookupRegisterAllocation(op2Name, instructionId);
+            if(op2Reg == "spill") {
+                boolean isInTempReg = false;
+                for (String reg : tempRegisters) {
+                    if (tempRegisterUse.containsKey(reg) &&
+                            tempRegisterUse.get(reg).equals(op2Name)) {
+                        op2Reg = reg;
+                        isInTempReg = true;
+                        break;
+                    }
+                }
+                if(!isInTempReg) {
+                    op2Reg = allocateTempRegister(op2Name);
+                    int offset = varStackOffsets.get(op2Name);
+                    builder.load(op2Reg, "sp", offset);
+                }
+            } else if (op2Reg == "global") {
+                op2Reg = allocateTempRegister(op2Name);
+                lockRegister(op2Reg);
+                String addrReg = allocateTempRegister("addr_" + op2Name);
+                builder.la(addrReg, op2Name);
+                builder.load(op2Reg, addrReg, 0);
+                unlockRegister(addrReg);
+            }
         }
+        markRegisterDirty(op2Reg);
+        lockRegister(op2Reg);
 
-        // 获取结果存储位置
-        Location destLoc = registerAllocator.getLocation(instructionId, destVar);
-        String destReg;
-
-        if (destLoc == null || destLoc.type == Location.LocationType.STACK) {
-            // 分配临时寄存器用于结果
+        // 处理目标寄存器
+        String destReg = lookupRegisterAllocation(destVar, instructionId);
+        if(destReg.equals("spill")) {
             destReg = allocateTempRegister(destVar);
-            // 标记为脏寄存器
-            allocateStackSpace(destVar);
             markRegisterDirty(destReg);
-        } else {
-            // 使用分配的寄存器
-            destReg = destLoc.register;
+        } else if(destReg.equals("global")) {
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
         }
+        lockRegister(destReg);
 
         // 生成位运算指令
         builder.op3(operation, destReg, op1Reg, op2Reg);
+
+        // 解锁操作数寄存器
+        unlockRegister(op1Reg);
+        unlockRegister(op2Reg);
+
+        // 如果目标是全局变量，需要将结果写回
+        if(lookupRegisterAllocation(destVar, instructionId).equals("global")) {
+            String addrReg = allocateTempRegister("addr_" + destVar);
+            builder.la(addrReg, destVar);
+            builder.store(destReg, addrReg, 0);
+            tempRegisterDirty.put(destReg, false);
+        }
+
+        unlockRegister(destReg);
     }
 
     private void translateShiftOp(LLVMValueRef inst, int opcode) {
         // 获取操作数和结果变量名
-        LLVMValueRef op1 = LLVMGetOperand(inst, 0);
-        LLVMValueRef op2 = LLVMGetOperand(inst, 1);
+        LLVMValueRef op1 = LLVMGetOperand(inst, 0); // 被移位的值
+        LLVMValueRef op2 = LLVMGetOperand(inst, 1); // 移位量
         String destVar = LLVMGetValueName(inst).getString();
 
-        // 获取操作指令
+        // 获取移位操作类型
         String operation;
         switch (opcode) {
             case LLVMShl: operation = "sll"; break;  // 逻辑左移
@@ -1007,164 +1401,186 @@ public class IrTranslater {
             default: operation = "sll"; // 默认为左移
         }
 
-        // 处理第一个操作数（被移位的数）
+        // 处理第一个操作数（被移位的值）
         String op1Reg;
         if (LLVMIsAConstant(op1) != null) {
             long constValue = LLVMConstIntGetSExtValue(op1);
-            op1Reg = allocateTempRegister("const_temp");
+            op1Reg = allocateTempRegister("shiftop_const1");
             builder.loadImm(op1Reg, constValue);
         } else {
             String op1Name = LLVMGetValueName(op1).getString();
-            op1Reg = getVariableRegister(op1Name, instructionId);
+            op1Reg = lookupRegisterAllocation(op1Name, instructionId);
+            if(op1Reg.equals("spill")) {
+                // 从栈上加载
+                int offset = varStackOffsets.get(op1Name);
+                op1Reg = allocateTempRegister(op1Name);
+                builder.load(op1Reg, "sp", offset);
+            } else if (op1Reg.equals("global")) {
+                // 从全局变量加载
+                op1Reg = allocateTempRegister(op1Name);
+                String addrReg = allocateTempRegister("addr_" + op1Name);
+                builder.la(addrReg, op1Name);
+                builder.load(op1Reg, addrReg, 0);
+                unlockRegister(addrReg);
+            }
         }
+        markRegisterDirty(op1Reg);
+        lockRegister(op1Reg);
 
-        // 处理第二个操作数（移位数量）
+        // 处理第二个操作数（移位量）
         String op2Reg;
         if (LLVMIsAConstant(op2) != null) {
+            // 处理常量移位量
             long constValue = LLVMConstIntGetSExtValue(op2);
-            if (constValue >= 0 && constValue <= 31) {
-                op2Reg = String.valueOf(constValue);
-                operation += "i"; // 使用立即数版本的指令
-            } else {
-                // 移位超出范围，需要特殊处理
-                op2Reg = allocateTempRegister("const_temp2");
-                builder.loadImm(op2Reg, constValue % 32); // 移位值需要模32
-            }
+            op2Reg = allocateTempRegister("shiftop_const2");
+            builder.loadImm(op2Reg, constValue);
         } else {
             String op2Name = LLVMGetValueName(op2).getString();
-            op2Reg = getVariableRegister(op2Name, instructionId);
-
-            // 确保移位值在合理范围内
-            String tempReg = allocateTempRegister("shift_temp");
-            builder.op2("andi", tempReg, op2Reg, "31"); // 移位值与31相与
-            op2Reg = tempReg;
+            op2Reg = lookupRegisterAllocation(op2Name, instructionId);
+            if(op2Reg.equals("spill")) {
+                // 从栈上加载
+                int offset = varStackOffsets.get(op2Name);
+                op2Reg = allocateTempRegister(op2Name);
+                builder.load(op2Reg, "sp", offset);
+            } else if (op2Reg.equals("global")) {
+                // 从全局变量加载
+                op2Reg = allocateTempRegister(op2Name);
+                String addrReg = allocateTempRegister("addr_" + op2Name);
+                builder.la(addrReg, op2Name);
+                builder.load(op2Reg, addrReg, 0);
+                unlockRegister(addrReg);
+            }
         }
+        markRegisterDirty(op2Reg);
+        lockRegister(op2Reg);
 
-        // 获取结果存储位置
-        Location destLoc = registerAllocator.getLocation(instructionId, destVar);
-        String destReg;
-
-        if (destLoc == null || destLoc.type == Location.LocationType.STACK) {
+        // 获取目标寄存器
+        String destReg = lookupRegisterAllocation(destVar, instructionId);
+        if(destReg.equals("spill")) {
             destReg = allocateTempRegister(destVar);
-            allocateStackSpace(destVar);
             markRegisterDirty(destReg);
-        } else {
-            destReg = destLoc.register;
+        } else if(destReg.equals("global")) {
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
+        }
+        lockRegister(destReg);
+
+        // 生成移位指令 - 统一使用寄存器版本
+        builder.op3(operation, destReg, op1Reg, op2Reg);
+
+        // 解锁操作数寄存器
+        unlockRegister(op1Reg);
+        unlockRegister(op2Reg);
+
+        // 如果目标是全局变量，需要将结果写回
+        if(lookupRegisterAllocation(destVar, instructionId).equals("global")) {
+            String addrReg = allocateTempRegister("addr_" + destVar);
+            builder.la(addrReg, destVar);
+            builder.store(destReg, addrReg, 0);
+            tempRegisterDirty.put(destReg, false);
         }
 
-        // 生成移位指令
-        builder.op3(operation, destReg, op1Reg, op2Reg);
+        unlockRegister(destReg);
     }
 
     private void translateCast(LLVMValueRef inst, int opcode) {
-        LLVMValueRef src = LLVMGetOperand(inst, 0);
-        String srcName = LLVMGetValueName(src).getString();
-        String destName = LLVMGetValueName(inst).getString();
+        LLVMValueRef srcValue = LLVMGetOperand(inst, 0);
+        String destVar = LLVMGetValueName(inst).getString();
 
-        builder.comment("类型转换 " + opcode + "：" + srcName + " -> " + destName);
+        builder.comment("类型转换 " + destVar);
 
-        // 获取源操作数位置
+        // 处理源操作数
         String srcReg;
-        if (LLVMIsAConstant(src) != null) {
-            long constValue = LLVMConstIntGetSExtValue(src);
-            srcReg = allocateTempRegister("const_temp");
+        if (LLVMIsAConstant(srcValue) != null) {
+            long constValue = LLVMConstIntGetSExtValue(srcValue);
+            srcReg = allocateTempRegister("cast_const");
             builder.loadImm(srcReg, constValue);
         } else {
-            srcReg = getVariableRegister(srcName, instructionId);
+            String srcName = LLVMGetValueName(srcValue).getString();
+            srcReg = lookupRegisterAllocation(srcName, instructionId);
+            if(srcReg.equals("spill")) {
+                int offset = varStackOffsets.get(srcName);
+                srcReg = allocateTempRegister(srcName);
+                builder.load(srcReg, "sp", offset);
+            } else if(srcReg.equals("global")) {
+                srcReg = allocateTempRegister(srcName);
+                String addrReg = allocateTempRegister("addr_" + srcName);
+                builder.la(addrReg, srcName);
+                builder.load(srcReg, addrReg, 0);
+                unlockRegister(addrReg);
+            }
         }
+        lockRegister(srcReg);
 
-        // 获取目标位置
-        Location destLoc = registerAllocator.getLocation(instructionId, destName);
-        String destReg;
-
-        if (destLoc == null || destLoc.type == Location.LocationType.STACK) {
-            destReg = allocateTempRegister(destName);
-            allocateStackSpace(destName);
+        // 获取目标寄存器
+        String destReg = lookupRegisterAllocation(destVar, instructionId);
+        if(destReg.equals("spill")) {
+            destReg = allocateTempRegister(destVar);
             markRegisterDirty(destReg);
-        } else {
-            destReg = destLoc.register;
+        } else if(destReg.equals("global")) {
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
         }
+        lockRegister(destReg);
 
-        // 根据操作码处理不同类型的转换
+        // 根据转换类型生成指令
         switch (opcode) {
-            case LLVMZExt:  // 零扩展
-                // 获取源类型和目标类型大小
-                LLVMTypeRef srcType = LLVMTypeOf(src);
-                LLVMTypeRef destType = LLVMTypeOf(inst);
-                int srcBits = LLVMGetIntTypeWidth(srcType);
-
-                if (srcBits == 1) {
-                    // 布尔值转整数，不需要特殊处理，值已经是0或1
-                    builder.move(destReg, srcReg);
-                } else {
-                    // 一般零扩展可以通过与掩码相与实现
-                    int mask = (1 << srcBits) - 1;
-                    builder.op2("andi", destReg, srcReg, String.valueOf(mask));
-                }
-                break;
-
-            case LLVMSExt:  // 符号扩展
-                // 获取源类型大小
-                srcType = LLVMTypeOf(src);
-                destType = LLVMTypeOf(inst);
-                srcBits = LLVMGetIntTypeWidth(srcType);
-                int destBits = LLVMGetIntTypeWidth(destType);
-
-                if (srcBits == 1) {
-                    // 布尔值符号扩展，仍然是0或1
-                    builder.move(destReg, srcReg);
-                } else if (srcBits == 8) {
-                    // 8位符号扩展到32位
-                    builder.op2("slli", destReg, srcReg, "24");
-                    builder.op2("srai", destReg, destReg, "24");
-                } else if (srcBits == 16) {
-                    // 16位符号扩展到32位
-                    builder.op2("slli", destReg, srcReg, "16");
-                    builder.op2("srai", destReg, destReg, "16");
-                } else {
-                    // 其他情况，默认处理
-                    builder.move(destReg, srcReg);
-                }
-                break;
-
-            case LLVMTrunc:  // 截断
-                // 截断只需要保留低位，RISC-V中寄存器操作隐含32位，不需要特殊指令
+            case LLVMTrunc:
+            case LLVMZExt:
+            case LLVMSExt:
+                // 在RISC-V中，整数类型转换可能只需要简单地将值从一个寄存器复制到另一个
                 builder.move(destReg, srcReg);
-
-                // 如果需要明确截断位数
-                srcType = LLVMTypeOf(src);
-                destType = LLVMTypeOf(inst);
-                destBits = LLVMGetIntTypeWidth(destType);
-
-                if (destBits < 32) {
-                    // 生成掩码以保留截断后的位
-                    int mask = (1 << destBits) - 1;
-                    builder.op2("andi", destReg, destReg, String.valueOf(mask));
-                }
                 break;
-
             default:
                 builder.comment("不支持的类型转换: " + opcode);
-                builder.move(destReg, srcReg);  // 默认行为
                 break;
         }
+
+        unlockRegister(srcReg);
+
+        // 如果目标是全局变量，需要将结果写回
+        if(lookupRegisterAllocation(destVar, instructionId).equals("global")) {
+            String addrReg = allocateTempRegister("addr_" + destVar);
+            builder.la(addrReg, destVar);
+            builder.store(destReg, addrReg, 0);
+            tempRegisterDirty.put(destReg, false);
+        }
+
+        unlockRegister(destReg);
     }
 
     private void translatePhi(LLVMValueRef inst) {
-        builder.comment("phi指令");
-        // Phi指令本身不生成代码，其实现由前驱基本块的跳转处理
-        // 这里只需要为目标变量分配寄存器
-
         String destVar = LLVMGetValueName(inst).getString();
-        Location destLoc = registerAllocator.getLocation(instructionId, destVar);
+        builder.comment("处理phi指令 " + destVar);
 
-        if (destLoc == null || destLoc.type == Location.LocationType.STACK) {
-            // 确保为变量分配了栈空间
-            allocateStackSpace(destVar);
+        // 获取当前基本块的前一个基本块
+        LLVMBasicBlockRef currentBB = LLVMGetInstructionParent(inst);
+        String currentBBName = LLVMGetBasicBlockName(currentBB).getString();
+
+        // 获取目标寄存器
+        String destReg = lookupRegisterAllocation(destVar, instructionId);
+        if(destReg.equals("spill")) {
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
+        } else if(destReg.equals("global")) {
+            destReg = allocateTempRegister(destVar);
+            markRegisterDirty(destReg);
+        }
+        lockRegister(destReg);
+
+        // phi指令的处理会在前导块的结尾完成
+        // 这里我们只标记destReg为phi变量的目标寄存器
+        // phi指令的实际处理将由前导块在跳转前完成
+
+        // 如果目标是全局变量，需要将结果写回
+        if(lookupRegisterAllocation(destVar, instructionId).equals("global")) {
+            String addrReg = allocateTempRegister("addr_" + destVar);
+            builder.la(addrReg, destVar);
+            builder.store(destReg, addrReg, 0);
+            tempRegisterDirty.put(destReg, false);
         }
 
-        // 在实际编译过程中，需要修改前驱基本块的代码，使其在跳转前将正确的值放入phi的目标位置
-        // 这需要额外的分析和处理，这里只是一个简单的占位实现
+        unlockRegister(destReg);
     }
 
 
