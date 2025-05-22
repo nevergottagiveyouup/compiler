@@ -111,6 +111,6 @@ public class AsmBuilder {
     }
 
     public void ecall() {
-        assemblyOutput.add("ecall");
+        assemblyOutput.add("    ecall");
     }
 }
