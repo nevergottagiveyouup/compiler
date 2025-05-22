@@ -199,7 +199,7 @@ public class IrTranslater {
                     int offset= varStackOffsets.get(varName);
                     builder.store(regName,"sp",offset);
                 }else{//说明这个溢出的变量是新定义的
-
+                    allocateTempRegister(varName);
                 }
             }
         }
