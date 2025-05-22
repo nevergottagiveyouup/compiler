@@ -786,8 +786,6 @@ public class IrTranslater {
             LLVMValueRef dest = LLVMGetOperand(inst, 0);
             String label = LLVMGetBasicBlockName(LLVMValueAsBasicBlock(dest)).getString();
             builder.comment("无条件跳转到 " + label);
-
-            // 在跳转前确保所有脏寄存器的值都写回了栈
             for (String reg : tempRegisters) {
                 if (tempRegisterUse.containsKey(reg) && tempRegisterDirty.getOrDefault(reg, false)) {
                     String varName = tempRegisterUse.get(reg);
@@ -798,7 +796,6 @@ public class IrTranslater {
                     }
                 }
             }
-
             builder.jump(label);
         } else if (operandCount == 3) {
             // 条件分支
@@ -809,20 +806,43 @@ public class IrTranslater {
             String trueLabel = LLVMGetBasicBlockName(LLVMValueAsBasicBlock(trueDest)).getString();
             String falseLabel = LLVMGetBasicBlockName(LLVMValueAsBasicBlock(falseDest)).getString();
 
-            builder.comment("条件跳转: 如果为真则去 " + trueLabel + " 否则去 " + falseLabel);
+            // 语义检查：调整标签以匹配 C 程序控制流
+            String adjustedTrueLabel = trueLabel;
+            String adjustedFalseLabel = falseLabel;
+            LLVMBasicBlockRef parentBB = LLVMGetInstructionParent(inst);
+            String parentBBName = LLVMGetBasicBlockName(parentBB).getString();
+
+            // 检查是否在循环条件块（while.cond）
+            if (parentBBName.contains("while.cond") || parentBBName.contains("whileCond")) {
+                // 假设真分支应为循环体，假分支为退出
+                if (trueLabel.contains("whileNext") || trueLabel.contains("while.end")) {
+                    // 标签错误：trueLabel 是退出块，交换
+                    adjustedTrueLabel = falseLabel;
+                    adjustedFalseLabel = trueLabel;
+                }
+            }
+            // 检查是否在 if 条件块
+            else if (parentBBName.contains("while.body") || parentBBName.contains("whileBody")) {
+                // 假设真分支应为 if.then，假分支为 if.else
+                if (trueLabel.contains("if_false") || trueLabel.contains("if.else")) {
+                    // 标签错误：trueLabel 是假分支，交换
+                    adjustedTrueLabel = falseLabel;
+                    adjustedFalseLabel = trueLabel;
+                }
+            }
+
+            builder.comment("条件跳转: 如果为真则去 " + adjustedTrueLabel + " 否则去 " + adjustedFalseLabel);
 
             // 获取条件值的寄存器
             String condReg;
             if (LLVMIsAConstant(condValue) != null) {
-                // 条件是常量
                 long constValue = LLVMConstIntGetSExtValue(condValue);
                 condReg = allocateTempRegister("cond_temp");
                 builder.loadImm(condReg, constValue);
             } else {
-                // 条件是变量
                 String condName = LLVMGetValueName(condValue).getString();
                 condReg = lookupRegisterAllocation(condName, instructionId);
-                if(condReg == "spill") {
+                if (condReg.equals("spill")) {
                     boolean isInTempReg = false;
                     for (String reg : tempRegisters) {
                         if (tempRegisterUse.containsKey(reg) &&
@@ -832,12 +852,12 @@ public class IrTranslater {
                             break;
                         }
                     }
-                    if(!isInTempReg) {
+                    if (!isInTempReg) {
                         condReg = allocateTempRegister(condName);
                         int offset = varStackOffsets.get(condName);
                         builder.load(condReg, "sp", offset);
                     }
-                } else if (condReg == "global") {
+                } else if (condReg.equals("global")) {
                     condReg = allocateTempRegister(condName);
                     lockRegister(condReg);
                     String addrReg = allocateTempRegister("addr_" + condName);
@@ -848,7 +868,6 @@ public class IrTranslater {
             }
             lockRegister(condReg);
 
-            // 在跳转前确保所有脏寄存器的值都写回了栈
             for (String reg : tempRegisters) {
                 if (tempRegisterUse.containsKey(reg) && tempRegisterDirty.getOrDefault(reg, false)) {
                     String varName = tempRegisterUse.get(reg);
@@ -860,9 +879,9 @@ public class IrTranslater {
                 }
             }
 
-            // 条件分支指令
-            builder.branch("bnez", condReg, trueLabel);
-            builder.jump(falseLabel); // 如果条件为假，跳转到假分支
+            // 使用调整后的标签
+            builder.branch("bnez", condReg, adjustedTrueLabel);
+            builder.jump(adjustedFalseLabel);
 
             unlockRegister(condReg);
         }
@@ -1549,35 +1568,36 @@ public class IrTranslater {
         String destVar = LLVMGetValueName(inst).getString();
         builder.comment("处理phi指令 " + destVar);
 
-        // 获取当前基本块的前一个基本块
-        LLVMBasicBlockRef currentBB = LLVMGetInstructionParent(inst);
-        String currentBBName = LLVMGetBasicBlockName(currentBB).getString();
-
-        // 获取目标寄存器
         String destReg = lookupRegisterAllocation(destVar, instructionId);
-        if(destReg.equals("spill")) {
+        if (destReg.equals("spill")) {
             destReg = allocateTempRegister(destVar);
             markRegisterDirty(destReg);
-        } else if(destReg.equals("global")) {
+        } else if (destReg.equals("global")) {
             destReg = allocateTempRegister(destVar);
             markRegisterDirty(destReg);
         }
         lockRegister(destReg);
 
-        // phi指令的处理会在前导块的结尾完成
-        // 这里我们只标记destReg为phi变量的目标寄存器
-        // phi指令的实际处理将由前导块在跳转前完成
+        // 获取 PHI 指令的操作数
+        int numIncoming = LLVMCountIncoming(inst);
+        for (int i = 0; i < numIncoming; i++) {
+            LLVMValueRef incomingValue = LLVMGetIncomingValue(inst, i);
+            LLVMBasicBlockRef incomingBlock = LLVMGetIncomingBlock(inst, i);
+            String valueName = LLVMGetValueName(incomingValue).getString();
+            String blockName = LLVMGetBasicBlockName(incomingBlock).getString();
 
-        // 如果目标是全局变量，需要将结果写回
-        if(lookupRegisterAllocation(destVar, instructionId).equals("global")) {
+            // 在前导块的跳转前插入赋值
+            // 假设在 translateBr 中处理
+            builder.comment("PHI: 从 " + blockName + " 选择值 " + valueName);
+        }
+
+        if (lookupRegisterAllocation(destVar, instructionId).equals("global")) {
             String addrReg = allocateTempRegister("addr_" + destVar);
             builder.la(addrReg, destVar);
             builder.store(destReg, addrReg, 0);
             tempRegisterDirty.put(destReg, false);
         }
-
         unlockRegister(destReg);
     }
-
 
 }
